@@ -64,6 +64,38 @@ def test_filter_rows_not_equal(sample_df: pd.DataFrame) -> None:
     _assert_unchanged(original, sample_df)
 
 
+def test_filter_rows_string_numeric_value(sample_df: pd.DataFrame) -> None:
+    original = sample_df.copy()
+    result = filter_rows(sample_df, "매출", ">", "1500")
+    assert len(result) == 2
+    assert all(result["매출"] > 1500)
+    _assert_unchanged(original, sample_df)
+
+
+def test_filter_rows_contains_special_chars(sample_df: pd.DataFrame) -> None:
+    original = sample_df.copy()
+    df = sample_df.copy()
+    df["비고"] = ["A+B", "C*D", "E.F", "G(H)", "A+B"]
+    result = filter_rows(df, "비고", "contains", "A+B")
+    assert len(result) == 2
+    _assert_unchanged(original, sample_df)
+
+
+def test_sort_rows_missing_column(sample_df: pd.DataFrame) -> None:
+    with pytest.raises(KeyError, match="매출액"):
+        sort_rows(sample_df, "매출액")
+
+
+def test_select_columns_missing_column(sample_df: pd.DataFrame) -> None:
+    with pytest.raises(KeyError):
+        select_columns(sample_df, ["이름", "없는컬럼"])
+
+
+def test_aggregate_missing_column(sample_df: pd.DataFrame) -> None:
+    with pytest.raises(KeyError, match="매출액"):
+        aggregate(sample_df, ["부서"], "매출액", "sum")
+
+
 # --- sort_rows ---
 
 

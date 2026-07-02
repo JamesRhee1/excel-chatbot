@@ -1,4 +1,4 @@
-"""Orchestrate load → intent parse → operation chain."""
+"""Orchestrate load → profile → route/plan → execute → respond."""
 
 from __future__ import annotations
 
@@ -6,8 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from agent.intent_utils import prepend_exclude_summary
+from agent.response_formatter import format_user_response
+from agent.router import route_query
 from agent.tools import apply_operation
-from core.reader import load_excel, summarize
+from core.profiler import profile_dataframe
+from core.reader import load_excel
 from core.writer import save_excel
 from llm.client import OllamaConnectionError, OllamaModelNotFoundError
 from llm.intent import IntentParseError, parse_intent
@@ -21,39 +25,35 @@ def run(
     dry_run: bool = False,
     sheet_name: str | int = 0,
 ) -> dict:
-    """Execute a natural-language request against an Excel file.
-
-    Flow: load_excel → summarize → parse_intent → chain apply_operation → optional save.
-
-    Args:
-        file_path: Path to the Excel file.
-        user_message: Natural-language request from the user.
-        model: Ollama model name (None uses OLLAMA_MODEL env default).
-        output_path: If set, save the result DataFrame via core.writer.save_excel.
-        dry_run: If True, parse intent only without executing or saving.
-        sheet_name: Sheet name or index to load.
-
-    Returns:
-        Structured result dict with success, df, operations, paths, and error fields.
-    """
-    columns: list[str] = []
+    profile: dict = {}
     try:
         df = load_excel(file_path, sheet_name=sheet_name)
-        summary = summarize(df)
-        columns = summary["column_names"]
-        intent = parse_intent(user_message, columns, model=model)
+        profile = profile_dataframe(df)
+
+        intent = route_query(user_message, profile)
+        if intent is None:
+            intent = parse_intent(user_message, profile, model=model)
+        intent = prepend_exclude_summary(intent, user_message, profile)
 
         if dry_run:
-            return _success_result(operations=intent["operations"])
+            return _success_result(
+                answer_type=intent.get("answer_type", "dataframe"),
+                operations=intent["operations"],
+                message=intent.get("message") or None,
+                profile=_profile_summary(profile),
+            )
 
-        result_df, applied = _apply_operations(df, intent["operations"])
+        execution = _apply_operations(df, intent["operations"], profile)
+        message, display_df, raw_df = format_user_response(
+            user_message, intent, execution, profile
+        )
+
         saved_path: str | None = None
         backup_path: str | None = None
-
-        if output_path is not None:
+        if output_path is not None and raw_df is not None:
             dest = Path(output_path)
             had_existing = dest.exists()
-            saved_path = save_excel(result_df, output_path, backup=True)
+            saved_path = save_excel(raw_df, output_path, backup=True)
             if had_existing:
                 backups = sorted(
                     dest.parent.glob(f"{dest.name}.bak_*"),
@@ -62,25 +62,34 @@ def run(
                 )
                 backup_path = str(backups[0]) if backups else None
 
+        answer_type = intent.get("answer_type", "dataframe")
+        if display_df is not None and message:
+            answer_type = "mixed"
+        elif message and display_df is None:
+            answer_type = "message"
+
         return _success_result(
-            df=result_df,
-            operations=applied,
+            answer_type=answer_type,
+            df=display_df,
+            raw_df=raw_df,
+            operations=execution.get("applied", []),
+            message=message,
+            debug_logs=execution.get("debug_logs", []),
+            profile=_profile_summary(profile),
             saved_path=saved_path,
             backup_path=backup_path,
         )
 
     except IntentParseError as exc:
-        return _error_result(
-            f"요청을 이해하지 못했어요. 다시 말씀해 주세요. ({exc})"
-        )
+        return _error_result(str(exc))
     except OllamaConnectionError as exc:
         return _error_result(str(exc))
     except OllamaModelNotFoundError as exc:
         return _error_result(str(exc))
     except KeyError as exc:
-        return _error_result(_missing_column_message(exc, columns))
+        return _error_result(_missing_column_message(exc, profile))
     except ValueError as exc:
-        return _error_result(_format_value_error(exc))
+        return _error_result(_format_value_error(exc, profile))
     except Exception as exc:
         return _error_result(f"예상치 못한 오류가 발생했습니다: {exc}")
 
@@ -88,26 +97,78 @@ def run(
 def _apply_operations(
     df: pd.DataFrame,
     operations: list[dict],
-) -> tuple[pd.DataFrame, list[dict]]:
-    """Apply operations sequentially, returning the result and applied log."""
-    result_df = df
+    profile: dict,
+) -> dict:
+    result_df: pd.DataFrame | None = df
+    debug_logs: list[str] = []
+    resolved_columns: dict[str, str] = {}
+    value_metadata: dict = {}
     applied: list[dict] = []
+    produced_dataframe = False
+
     for operation in operations:
-        result_df = apply_operation(result_df, operation)
+        if result_df is None:
+            result_df = df
+        try:
+            outcome = apply_operation(result_df, operation, profile=profile)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+
+        resolved_columns.update(outcome.get("resolved_columns") or {})
+        if outcome.get("value_metadata"):
+            value_metadata = outcome["value_metadata"]
+        if outcome.get("df") is not None:
+            result_df = outcome["df"]
+            produced_dataframe = True
+        if outcome.get("debug_log"):
+            debug_logs.append(outcome["debug_log"])
+        if outcome.get("message") and operation.get("type") == "clarify":
+            debug_logs.append(outcome["message"])
         applied.append(operation)
-    return result_df, applied
+
+    clarify_only = operations and all(op.get("type") == "clarify" for op in operations)
+    if not produced_dataframe and clarify_only:
+        result_df = None
+
+    return {
+        "df": result_df,
+        "debug_logs": debug_logs,
+        "resolved_columns": resolved_columns,
+        "value_metadata": value_metadata,
+        "applied": applied,
+    }
+
+
+def _profile_summary(profile: dict) -> dict:
+    return {
+        "rows": profile.get("rows"),
+        "columns": profile.get("columns"),
+        "likely_amount_columns": profile.get("likely_amount_columns", []),
+        "likely_name_columns": profile.get("likely_name_columns", []),
+        "likely_category_columns": profile.get("likely_category_columns", []),
+    }
 
 
 def _success_result(
     operations: list[dict],
+    answer_type: str = "dataframe",
     df: pd.DataFrame | None = None,
+    raw_df: pd.DataFrame | None = None,
+    message: str | None = None,
+    debug_logs: list[str] | None = None,
+    profile: dict | None = None,
     saved_path: str | None = None,
     backup_path: str | None = None,
 ) -> dict:
     return {
         "success": True,
+        "answer_type": answer_type,
+        "message": message,
         "df": df,
+        "raw_df": raw_df,
         "operations": operations,
+        "debug_logs": debug_logs or [],
+        "profile": profile,
         "saved_path": saved_path,
         "backup_path": backup_path,
         "error": None,
@@ -117,36 +178,33 @@ def _success_result(
 def _error_result(error: str, operations: list[dict] | None = None) -> dict:
     return {
         "success": False,
+        "answer_type": "message",
+        "message": None,
         "df": None,
+        "raw_df": None,
         "operations": operations or [],
+        "debug_logs": [],
+        "profile": None,
         "saved_path": None,
         "backup_path": None,
         "error": error,
     }
 
 
-def _missing_column_message(exc: KeyError, columns: list[str]) -> str:
+def _missing_column_message(exc: KeyError, profile: dict) -> str:
     key = exc.args[0] if exc.args else "?"
-    if isinstance(key, (list, tuple)):
-        missing = ", ".join(str(item) for item in key)
-    else:
-        missing = str(key).strip("'\"")
-    available = ", ".join(columns)
-    return f"컬럼 '{missing}'을(를) 찾을 수 없어요. 있는 컬럼: {available}"
+    missing = str(key).strip("'\"") if not isinstance(key, (list, tuple)) else ", ".join(map(str, key))
+    cols = profile.get("column_names", [])
+    return f"컬럼 '{missing}'을(를) 찾을 수 없어요. 있는 컬럼: {', '.join(cols[:8])}"
 
 
-def _format_value_error(exc: ValueError) -> str:
+def _format_value_error(exc: ValueError, profile: dict) -> str:
     message = str(exc)
+    if "찾지 못했습니다" in message or "찾을 수 없" in message:
+        return (
+            f"{message}\n\n"
+            "다시 질문해보세요. 예: '당년도예산이 가장 높은 행', '인쇄비가 얼마야?'"
+        )
     if "지원하지 않는 operation type" in message:
         return message
-    if "Unsupported operator" in message:
-        return (
-            "지원하지 않는 필터 연산자입니다. "
-            "사용 가능: >, <, >=, <=, ==, !=, contains"
-        )
-    if "Unsupported agg_func" in message:
-        return (
-            "지원하지 않는 집계 함수입니다. "
-            "사용 가능: sum, mean, count, max, min"
-        )
     return f"작업 실행 중 오류가 발생했습니다: {message}"

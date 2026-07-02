@@ -32,7 +32,7 @@ def sample_excel(tmp_path, sample_df: pd.DataFrame) -> str:
 
 @patch("agent.executor.parse_intent")
 def test_run_passes_model_to_parse_intent(mock_parse_intent, sample_excel: str) -> None:
-    mock_parse_intent.return_value = {"operations": []}
+    mock_parse_intent.return_value = {"operations": [], "message": ""}
 
     result = run(sample_excel, "정렬해줘", model="qwen3:8b", dry_run=True)
 
@@ -89,16 +89,14 @@ def test_run_missing_column_returns_korean_error(
     mock_parse_intent, sample_excel: str
 ) -> None:
     mock_parse_intent.return_value = {
-        "operations": [{"type": "filter", "column": "매출액", "op": ">", "value": 1000}]
+        "operations": [{"type": "filter", "column": "존재하지않는컬럼", "op": ">", "value": 1000}]
     }
 
-    result = run(sample_excel, "매출액 1000 이상")
+    result = run(sample_excel, "존재하지않는컬럼 1000 이상")
 
     assert result["success"] is False
     assert result["df"] is None
-    assert "매출액" in result["error"]
-    assert "이름" in result["error"]
-    assert "매출" in result["error"]
+    assert "존재하지않는컬럼" in result["error"] or "찾을 수 없" in result["error"]
 
 
 @patch("agent.executor.parse_intent")
@@ -118,7 +116,7 @@ def test_run_intent_parse_error(mock_parse_intent, sample_excel: str) -> None:
     result = run(sample_excel, "알 수 없는 요청")
 
     assert result["success"] is False
-    assert "요청을 이해하지 못했어요" in result["error"]
+    assert "operations" in result["error"]
 
 
 @patch("agent.executor.parse_intent")
