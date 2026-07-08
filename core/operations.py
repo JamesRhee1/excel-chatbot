@@ -270,6 +270,47 @@ def value_answer(
     return rows.iloc[[0]].copy(), metadata
 
 
+_DERIVE_OPERATORS = frozenset({"add", "subtract", "multiply", "divide", "percent", "abs_diff"})
+
+
+def derive_column(
+    df: pd.DataFrame,
+    new_column: str,
+    left_col: str,
+    op: str,
+    right_col: str | float | int,
+) -> pd.DataFrame:
+    """Add a derived numeric column without mutating the input DataFrame."""
+    if op not in _DERIVE_OPERATORS:
+        raise ValueError(f"지원하지 않는 derive op: {op!r}")
+
+    result = df.copy()
+    _require_columns(result, [left_col])
+    left = _coerce_numeric_series(result[left_col])
+
+    if isinstance(right_col, (int, float)):
+        right = pd.Series(float(right_col), index=result.index)
+    else:
+        right_name = str(right_col)
+        _require_columns(result, [right_name])
+        right = _coerce_numeric_series(result[right_name])
+
+    if op == "add":
+        result[new_column] = left + right
+    elif op == "subtract":
+        result[new_column] = left - right
+    elif op == "multiply":
+        result[new_column] = left * right
+    elif op in ("divide", "percent"):
+        denom = right.replace(0, pd.NA)
+        quotient = left / denom
+        result[new_column] = quotient * 100 if op == "percent" else quotient
+    elif op == "abs_diff":
+        result[new_column] = (left - right).abs()
+
+    return result
+
+
 def compare_rows(df: pd.DataFrame, query_a: str, query_b: str, profile: dict | None = None) -> tuple[pd.DataFrame, str]:
     """Extension point for future 'A와 B 비교' queries."""
     rows_a = lookup_rows(df, query_a)

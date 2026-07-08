@@ -27,6 +27,8 @@ _FILTER_NUM_PATTERN = re.compile(
 )
 _FILTER_POSITIVE_PATTERN = re.compile(r"(.+?)(?:이|가)\s*0\s*보다\s*큰")
 _REMAINING_BALANCE = re.compile(r"(예산잔액|잔액).*(남|있는)|남은.*(예산|잔액)")
+_DERIVE_SUBTRACT_PATTERN = re.compile(r"(.+?)에서\s*(.+?)\s*뺀")
+_DERIVE_PERCENT_PATTERN = re.compile(r"(.+?)\s*대비\s*(.+?)\s*비율")
 
 _COMBINE_KEYWORDS = ("통합", "합쳐", "합치", "통합자료", "합쳐줘", "통합해")
 _FILE_LEVEL_KEYWORDS = ("파일별", "각 파일", "파일 마다", "파일마다")
@@ -88,6 +90,10 @@ def route_intent(user_message: str, profile: dict) -> dict | None:
     filter_intent = _try_filter(msg, profile)
     if filter_intent:
         return filter_intent
+
+    derive_intent = _try_derive(msg, profile)
+    if derive_intent:
+        return derive_intent
 
     sort_intent = _try_sort(msg, profile)
     if sort_intent:
@@ -183,6 +189,29 @@ def _try_filter(msg: str, profile: dict) -> dict | None:
         op_map = {"큰": ">", "초과": ">", "작은": "<", "미만": "<", "이상": ">=", "이하": "<="}
         op = op_map.get(match.group(3), ">")
         return _intent("dataframe", [{"type": "filter", "column": col, "op": op, "value": value}])
+    return None
+
+
+def _try_derive(msg: str, profile: dict) -> dict | None:
+    match = _DERIVE_SUBTRACT_PATTERN.search(msg)
+    if match:
+        left = _extract_column_hint(match.group(1), profile) or match.group(1).strip()
+        right = _extract_column_hint(match.group(2), profile) or match.group(2).strip()
+        new_name = f"{left}_minus_{right}"
+        return _intent(
+            "dataframe",
+            [{"type": "derive", "new_column": new_name, "left": left, "op": "subtract", "right": right}],
+        )
+
+    match = _DERIVE_PERCENT_PATTERN.search(msg)
+    if match:
+        left = _extract_column_hint(match.group(1), profile) or match.group(1).strip()
+        right = _extract_column_hint(match.group(2), profile) or match.group(2).strip()
+        new_name = f"{left}_대비_{right}_비율"
+        return _intent(
+            "dataframe",
+            [{"type": "derive", "new_column": new_name, "left": left, "op": "percent", "right": right}],
+        )
     return None
 
 

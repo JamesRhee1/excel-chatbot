@@ -17,6 +17,7 @@ from core.multi_operations import (
 )
 from core.operations import (
     aggregate,
+    derive_column,
     exclude_summary_rows,
     filter_row_types,
     filter_rows,
@@ -234,6 +235,25 @@ def _apply_multi_summary(df: pd.DataFrame, op: dict, profile: dict, context: dic
     return ApplyResult(df=None, message="multi_summary", stats=summary)
 
 
+def _apply_derive(df: pd.DataFrame, op: dict, profile: dict) -> ApplyResult:
+    resolved: dict[str, str] = {}
+    left_user = op["left"]
+    left_col = resolve_column(left_user, df, profile)
+    _track_resolution(resolved, left_user, left_col)
+
+    right = op["right"]
+    if isinstance(right, (int, float)):
+        right_value: str | float | int = right
+    else:
+        right_user = str(right)
+        right_col = resolve_column(right_user, df, profile)
+        _track_resolution(resolved, right_user, right_col)
+        right_value = right_col
+
+    result = derive_column(df, op["new_column"], left_col, op["op"], right_value)
+    return _result_df(result, resolved)
+
+
 _DISPATCH: dict[str, OperationHandler] = {
     "filter": _apply_filter,
     "sort": _apply_sort,
@@ -254,6 +274,7 @@ _DISPATCH: dict[str, OperationHandler] = {
     "top_n_by_file": _apply_top_n_by_file,
     "top_n_overall": _apply_top_n_overall,
     "multi_summary": _apply_multi_summary,
+    "derive": _apply_derive,
 }
 
 

@@ -144,6 +144,15 @@ OPERATION_SPECS: tuple[OpSpec, ...] = (
         output_type="message",
         allows_save_as=False,
     ),
+    OpSpec(
+        "derive",
+        required_fields=("new_column", "left", "op", "right"),
+        prompt_example=(
+            '{"type": "derive", "new_column": "차이", "left": "<col>", '
+            '"op": "subtract", "right": "<col|number>"}'
+        ),
+        include_in_llm_prompt=True,
+    ),
 )
 
 OPERATION_SPEC_BY_TYPE: dict[str, OpSpec] = {spec.type: spec for spec in OPERATION_SPECS}
