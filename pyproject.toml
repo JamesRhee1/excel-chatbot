@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "excel-chatbot"
+version = "0.1.0"
+description = "Local LLM (Ollama) Excel analysis chatbot with Streamlit UI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "James Rhee" }]
+dependencies = [
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+    "streamlit>=1.28.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+ollama = ["ollama>=0.3.0"]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/JamesRhee1/excel-chatbot"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent*", "core*", "llm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: tests that require a running Ollama server",
+]
+addopts = "-m 'not integration'"
