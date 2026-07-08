@@ -10,25 +10,69 @@ from agent.intent_utils import prepend_exclude_summary
 from agent.response_formatter import format_user_response
 from agent.router import route_query
 from agent.tools import apply_operation
+from core.dataset_builder import build_combined_dataset
+from core.multi_operations import build_multi_file_summary
+from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, validate_pipeline
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
+from core.workspace import Workspace
 from core.writer import save_excel
+from domains.registry import apply_derived_metrics
 from llm.client import OllamaConnectionError, OllamaModelNotFoundError
 from llm.intent import IntentParseError, parse_intent
 
+DEFAULT_MAIN_TABLE = "main"
+DEFAULT_COMBINED_TABLE = "combined"
+
 
 def run(
-    file_path: str,
-    user_message: str,
+    file_path: str | None = None,
+    user_message: str = "",
     model: str | None = None,
     output_path: str | None = None,
     dry_run: bool = False,
     sheet_name: str | int = 0,
+    file_results: list[dict] | None = None,
+    workspace: Workspace | None = None,
 ) -> dict:
     profile: dict = {}
+    ws = workspace or Workspace()
+    default_table = DEFAULT_MAIN_TABLE
+    combined_df: pd.DataFrame | None = None
+    file_summary: dict | None = None
+
     try:
-        df, domain = load_excel_with_domain(file_path, sheet_name=sheet_name)
-        profile = profile_dataframe(df, domain=domain)
+        if file_path:
+            df, domain = load_excel_with_domain(file_path, sheet_name=sheet_name)
+            if ws.get(DEFAULT_MAIN_TABLE) is None:
+                ws.add_table(DEFAULT_MAIN_TABLE, df, source=file_path, domain=domain)
+            default_table = DEFAULT_MAIN_TABLE
+            profile = ws.get(DEFAULT_MAIN_TABLE).profile  # type: ignore[union-attr]
+
+        if file_results:
+            combined_df = build_combined_dataset(file_results)
+            combined_profile = profile_dataframe(combined_df)
+            domain = combined_profile.get("domain", "generic")
+            combined_df = apply_derived_metrics(combined_df, domain)
+            combined_profile = profile_dataframe(combined_df, domain=domain)
+            if ws.get(DEFAULT_COMBINED_TABLE) is None:
+                ws.add_table(
+                    DEFAULT_COMBINED_TABLE,
+                    combined_df,
+                    source="union",
+                    domain=domain,
+                    profile=combined_profile,
+                )
+            default_table = DEFAULT_COMBINED_TABLE
+            profile = combined_profile
+            file_summary = build_multi_file_summary(combined_df, profile=combined_profile)
+
+        if not ws.list_tables():
+            return _error_result("분석할 데이터가 없습니다.")
+
+        if not profile:
+            table = ws.get(default_table)
+            profile = table.profile if table else {}
 
         intent = route_query(user_message, profile)
         if intent is None:
@@ -43,9 +87,27 @@ def run(
                 profile=_profile_summary(profile),
             )
 
-        execution = _apply_operations(df, intent["operations"], profile)
+        validate_pipeline(intent["operations"], ws)
+
+        table = ws.get(default_table)
+        context = {
+            "combined_df": combined_df if combined_df is not None else (table.df if table else None),
+            "file_summary": file_summary,
+        }
+        execution = _apply_operations_workspace(
+            ws,
+            intent["operations"],
+            default_table=default_table,
+            context=context,
+        )
+
         message, display_df, raw_df = format_user_response(
-            user_message, intent, execution, profile
+            user_message,
+            intent,
+            execution,
+            profile,
+            combined_df=context.get("combined_df"),
+            file_summary=context.get("file_summary"),
         )
 
         saved_path: str | None = None
@@ -72,15 +134,17 @@ def run(
             answer_type=answer_type,
             df=display_df,
             raw_df=raw_df,
+            combined_df=context.get("combined_df"),
             operations=execution.get("applied", []),
             message=message,
             debug_logs=execution.get("debug_logs", []),
             profile=_profile_summary(profile),
+            file_summary=context.get("file_summary"),
             saved_path=saved_path,
             backup_path=backup_path,
         )
 
-    except IntentParseError as exc:
+    except (IntentParseError, PipelineValidationError) as exc:
         return _error_result(str(exc))
     except OllamaConnectionError as exc:
         return _error_result(str(exc))
@@ -94,41 +158,76 @@ def run(
         return _error_result(f"예상치 못한 오류가 발생했습니다: {exc}")
 
 
-def _apply_operations(
-    df: pd.DataFrame,
+def _apply_operations_workspace(
+    workspace: Workspace,
     operations: list[dict],
-    profile: dict,
+    *,
+    default_table: str,
+    context: dict,
 ) -> dict:
-    result_df: pd.DataFrame | None = df
+    current_df: pd.DataFrame | None = None
+    current_profile: dict = {}
     debug_logs: list[str] = []
     resolved_columns: dict[str, str] = {}
     value_metadata: dict = {}
     applied: list[dict] = []
     produced_dataframe = False
+    prev_output: str | None = None
 
-    for operation in operations:
-        if result_df is None:
-            result_df = df
+    for index, operation in enumerate(operations):
+        spec = OPERATION_SPEC_BY_TYPE[operation["type"]]
+        source_name = operation.get("source")
+        if source_name:
+            table = workspace.get(source_name)
+            if table is None:
+                raise ValueError(f"테이블 '{source_name}'을(를) 찾을 수 없습니다.")
+            current_df, current_profile = table.df, table.profile
+        elif index == 0 or prev_output != "table" or current_df is None:
+            table = workspace.get(default_table)
+            if table is None:
+                raise ValueError(f"기본 테이블 '{default_table}'이(가) 없습니다.")
+            current_df, current_profile = table.df, table.profile
+        if current_df is None:
+            table = workspace.get(default_table)
+            current_df = table.df if table else pd.DataFrame()
+            current_profile = table.profile if table else {}
+
         try:
-            outcome = apply_operation(result_df, operation, profile=profile)
+            outcome = apply_operation(
+                current_df,
+                operation,
+                profile=current_profile,
+                context=context,
+            )
         except (KeyError, ValueError) as exc:
             raise ValueError(str(exc)) from exc
 
         resolved_columns.update(outcome.get("resolved_columns") or {})
         if outcome.get("value_metadata"):
             value_metadata = outcome["value_metadata"]
+        if outcome.get("stats") and operation.get("type") == "multi_summary":
+            context["file_summary"] = outcome["stats"]
         if outcome.get("df") is not None:
-            result_df = outcome["df"]
+            current_df = outcome["df"]
             produced_dataframe = True
+            save_as = operation.get("save_as")
+            if save_as:
+                saved_name = workspace.add_table(
+                    save_as,
+                    current_df,
+                    source=f"op:{operation['type']}",
+                    profile=current_profile,
+                )
+                debug_logs.append(f"결과를 '{saved_name}' 테이블로 저장했습니다.")
         if outcome.get("debug_log"):
             debug_logs.append(outcome["debug_log"])
         if outcome.get("message") and operation.get("type") == "clarify":
             debug_logs.append(outcome["message"])
         applied.append(operation)
+        prev_output = spec.output_type
 
     clarify_only = operations and all(op.get("type") == "clarify" for op in operations)
-    if not produced_dataframe and clarify_only:
-        result_df = None
+    result_df = None if (not produced_dataframe and clarify_only) else current_df
 
     return {
         "df": result_df,
@@ -154,9 +253,11 @@ def _success_result(
     answer_type: str = "dataframe",
     df: pd.DataFrame | None = None,
     raw_df: pd.DataFrame | None = None,
+    combined_df: pd.DataFrame | None = None,
     message: str | None = None,
     debug_logs: list[str] | None = None,
     profile: dict | None = None,
+    file_summary: dict | None = None,
     saved_path: str | None = None,
     backup_path: str | None = None,
 ) -> dict:
@@ -166,9 +267,11 @@ def _success_result(
         "message": message,
         "df": df,
         "raw_df": raw_df,
+        "combined_df": combined_df,
         "operations": operations,
         "debug_logs": debug_logs or [],
         "profile": profile,
+        "file_summary": file_summary,
         "saved_path": saved_path,
         "backup_path": backup_path,
         "error": None,
@@ -182,9 +285,11 @@ def _error_result(error: str, operations: list[dict] | None = None) -> dict:
         "message": None,
         "df": None,
         "raw_df": None,
+        "combined_df": None,
         "operations": operations or [],
         "debug_logs": [],
         "profile": None,
+        "file_summary": None,
         "saved_path": None,
         "backup_path": None,
         "error": error,

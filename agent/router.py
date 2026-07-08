@@ -28,6 +28,16 @@ _FILTER_NUM_PATTERN = re.compile(
 _FILTER_POSITIVE_PATTERN = re.compile(r"(.+?)(?:이|가)\s*0\s*보다\s*큰")
 _REMAINING_BALANCE = re.compile(r"(예산잔액|잔액).*(남|있는)|남은.*(예산|잔액)")
 
+_COMBINE_KEYWORDS = ("통합", "합쳐", "합치", "통합자료", "합쳐줘", "통합해")
+_FILE_LEVEL_KEYWORDS = ("파일별", "각 파일", "파일 마다", "파일마다")
+_OVERALL_KEYWORDS = ("전체 파일", "통합 데이터", "전체 통합", "모든 파일")
+_COMPARE_KEYWORDS = ("비교", "대비")
+_MULTI_SUMMARY_KEYWORDS = ("요약", "집행률 비교", "파일별 집행률")
+
+
+def _is_multi_profile(profile: dict) -> bool:
+    return "source_file" in profile.get("column_names", [])
+
 
 def _synonyms(profile: dict) -> dict[str, str]:
     return profile.get("domain_synonyms") or {}
@@ -61,6 +71,11 @@ def route_intent(user_message: str, profile: dict) -> dict | None:
         return _intent("message", [{"type": "help"}])
     if _is_describe_query(msg):
         return _intent("message", [{"type": "describe_dataset"}])
+
+    if _is_multi_profile(profile):
+        multi_intent = _route_multi_intent(msg, profile)
+        if multi_intent:
+            return multi_intent
 
     total_intent = _try_total_row(msg, profile)
     if total_intent:
@@ -287,3 +302,132 @@ def _guess_agg_column(msg: str, profile: dict) -> str | None:
         return hint
     likely = profile.get("likely_amount_columns", [])
     return likely[0] if likely else None
+
+
+def _multi_intent(op_type: str, **kwargs) -> dict:
+    operation = {"type": op_type, **kwargs}
+    return {
+        "answer_type": "mixed",
+        "operations": [operation],
+        "message": "",
+        "final_response_instruction": "",
+    }
+
+
+def _route_multi_intent(msg: str, profile: dict) -> dict | None:
+    if _is_combine_query(msg):
+        return _multi_intent("combine_dataset")
+    summarize = _try_summarize_by_file(msg, profile)
+    if summarize:
+        return summarize
+    compare_intent = _try_compare_item(msg, profile)
+    if compare_intent:
+        return compare_intent
+    top_by_file = _try_top_n_by_file(msg, profile)
+    if top_by_file:
+        return top_by_file
+    top_overall = _try_top_n_overall(msg, profile)
+    if top_overall:
+        return top_overall
+    if _is_multi_summary(msg):
+        return _multi_intent("multi_summary")
+    return None
+
+
+def _is_combine_query(msg: str) -> bool:
+    if any(kw in msg for kw in _COMBINE_KEYWORDS):
+        return True
+    if re.search(r"(이|여러)\s*파일", msg) and any(k in msg for k in ("통합", "합쳐", "합치")):
+        return True
+    return False
+
+
+def _is_multi_summary(msg: str) -> bool:
+    return any(kw in msg for kw in _MULTI_SUMMARY_KEYWORDS) and "파일" in msg
+
+
+def _known_columns(profile: dict) -> frozenset[str]:
+    cols = set(_synonyms(profile).keys()) | set(_synonyms(profile).values())
+    cols.update(profile.get("column_names", []))
+    cols.update(profile.get("domain_compare_columns", []))
+    cols.update(profile.get("likely_amount_columns", []))
+    return frozenset(cols)
+
+
+def _extract_n(msg: str, default: int = 1) -> int:
+    match = re.search(r"(\d+)\s*개", msg)
+    return int(match.group(1)) if match else default
+
+
+def _is_ascending(msg: str) -> bool:
+    return any(kw in msg for kw in _TOP_MIN_KEYWORDS)
+
+
+def _try_compare_item(msg: str, profile: dict) -> dict | None:
+    if not any(kw in msg for kw in _COMPARE_KEYWORDS + _FILE_LEVEL_KEYWORDS):
+        return None
+    if not any(kw in msg for kw in _FILE_LEVEL_KEYWORDS + ("파일별",)):
+        if "파일" not in msg:
+            return None
+    patterns = [
+        re.compile(r"(.+?)(?:을|를)\s*파일별(?:로)?\s*비교"),
+        re.compile(r"(.+?)\s*파일별(?:로)?\s*비교"),
+        re.compile(r"파일별\s*(.+?)\s*비교"),
+    ]
+    known = _known_columns(profile)
+    for pattern in patterns:
+        match = pattern.search(msg)
+        if match:
+            item = match.group(1).strip(" ?.,'\"")
+            item = re.sub(r"^(이|그|해당)\s*", "", item)
+            if len(item) >= 2 and item not in known and _extract_column_hint(item, profile) is None:
+                return _multi_intent("compare_item_across_files", item_query=item)
+    return None
+
+
+def _try_summarize_by_file(msg: str, profile: dict) -> dict | None:
+    if not any(kw in msg for kw in _FILE_LEVEL_KEYWORDS):
+        return None
+    if not any(kw in msg for kw in ("합계", "비교", "집행률", "평균", "총")):
+        return None
+    col = _extract_column_hint(msg, profile)
+    if not col:
+        return None
+    if col == "집행률" and "비교" in msg:
+        return _multi_intent("multi_summary")
+    return _multi_intent("summarize_by_file", value_column=col)
+
+
+def _try_top_n_by_file(msg: str, profile: dict) -> dict | None:
+    if not any(kw in msg for kw in _FILE_LEVEL_KEYWORDS + ("각 파일",)):
+        return None
+    if not any(kw in msg for kw in _TOP_MAX_KEYWORDS + _TOP_MIN_KEYWORDS + ("가장", "최고", "top")):
+        return None
+    col = _extract_column_hint(msg, profile)
+    if not col:
+        return None
+    return _multi_intent(
+        "top_n_by_file",
+        value_column=col,
+        n=_extract_n(msg, default=1),
+        ascending=_is_ascending(msg),
+    )
+
+
+def _try_top_n_overall(msg: str, profile: dict) -> dict | None:
+    if not any(kw in msg for kw in _OVERALL_KEYWORDS):
+        return None
+    if not any(kw in msg for kw in _TOP_MAX_KEYWORDS + _TOP_MIN_KEYWORDS + ("가장", "큰", "높은")):
+        return None
+    col = _extract_column_hint(msg, profile)
+    if not col and "잔액" in msg:
+        balance_cols = [c for c in profile.get("domain_compare_columns", []) if "잔액" in c]
+        col = balance_cols[0] if balance_cols else None
+    if not col:
+        return None
+    return _multi_intent(
+        "top_n_overall",
+        value_column=col,
+        n=_extract_n(msg, default=5),
+        ascending=_is_ascending(msg),
+    )

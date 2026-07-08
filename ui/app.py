@@ -10,7 +10,6 @@ import pandas as pd
 import streamlit as st
 
 from agent.executor import run
-from agent.multi_executor import run_multi
 from core.multi_loader import load_multiple_excels
 from core.profiler import profile_dataframe
 from core.reader import load_excel, load_excel_with_domain, list_sheets, summarize
@@ -288,7 +287,12 @@ def _process_user_message(user_message: str, model: str) -> None:
             st.session_state.messages.append({"role": "assistant", "content": "엑셀 파일을 먼저 업로드하세요."})
             return
         with st.spinner("다중 파일을 분석하는 중..."):
-            result = run_multi(st.session_state.file_results, user_message, model=model)
+            result = run(
+                user_message=user_message,
+                file_results=st.session_state.file_results,
+                workspace=st.session_state.get("workspace"),
+                model=model,
+            )
     else:
         if not st.session_state.file_path:
             st.session_state.messages.append({"role": "assistant", "content": "엑셀 파일을 먼저 업로드하세요."})

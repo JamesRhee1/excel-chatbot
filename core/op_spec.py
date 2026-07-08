@@ -108,6 +108,42 @@ OPERATION_SPECS: tuple[OpSpec, ...] = (
     OpSpec("select", required_fields=("columns",)),
     OpSpec("exclude_summary"),
     OpSpec("filter_row_type"),
+    OpSpec(
+        "combine_dataset",
+        input_type="table",
+        output_type="table",
+        allows_source=True,
+    ),
+    OpSpec(
+        "summarize_by_file",
+        required_fields=("value_column",),
+        input_type="table",
+        output_type="table",
+    ),
+    OpSpec(
+        "compare_item_across_files",
+        required_fields=("item_query",),
+        input_type="table",
+        output_type="table",
+    ),
+    OpSpec(
+        "top_n_by_file",
+        required_fields=("value_column",),
+        input_type="table",
+        output_type="table",
+    ),
+    OpSpec(
+        "top_n_overall",
+        required_fields=("value_column",),
+        input_type="table",
+        output_type="table",
+    ),
+    OpSpec(
+        "multi_summary",
+        input_type="table",
+        output_type="message",
+        allows_save_as=False,
+    ),
 )
 
 OPERATION_SPEC_BY_TYPE: dict[str, OpSpec] = {spec.type: spec for spec in OPERATION_SPECS}

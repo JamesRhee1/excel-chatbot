@@ -8,6 +8,13 @@ import pandas as pd
 
 from agent.op_registry import SUPPORTED_OPERATION_TYPES, validate_operation
 from core.column_resolver import resolve_column, resolve_columns
+from core.multi_operations import (
+    build_multi_file_summary,
+    compare_item_across_files,
+    summarize_by_file,
+    top_n_by_file,
+    top_n_overall,
+)
 from core.operations import (
     aggregate,
     exclude_summary_rows,
@@ -175,6 +182,58 @@ def _apply_clarify(df: pd.DataFrame, op: dict, profile: dict) -> ApplyResult:
     return ApplyResult(message=op.get("message") or UNKNOWN_MESSAGE)
 
 
+def _apply_combine_dataset(df: pd.DataFrame, op: dict, profile: dict, context: dict) -> ApplyResult:
+    combined = context.get("combined_df")
+    if combined is None:
+        combined = df
+    return _result_df(combined.head(50).copy())
+
+
+def _apply_summarize_by_file(df: pd.DataFrame, op: dict, profile: dict, context: dict) -> ApplyResult:
+    result = summarize_by_file(df, op["value_column"], profile=profile)
+    return _result_df(result)
+
+
+def _apply_compare_item(df: pd.DataFrame, op: dict, profile: dict, context: dict) -> ApplyResult:
+    result = compare_item_across_files(
+        df,
+        op["item_query"],
+        value_columns=op.get("value_columns"),
+        profile=profile,
+    )
+    if result.empty:
+        raise ValueError(f"'{op['item_query']}' 항목을 파일별로 찾지 못했습니다.")
+    return _result_df(result)
+
+
+def _apply_top_n_by_file(df: pd.DataFrame, op: dict, profile: dict, context: dict) -> ApplyResult:
+    result = top_n_by_file(
+        df,
+        op["value_column"],
+        n=op.get("n", 1),
+        ascending=op.get("ascending", False),
+        profile=profile,
+    )
+    return _result_df(result)
+
+
+def _apply_top_n_overall(df: pd.DataFrame, op: dict, profile: dict, context: dict) -> ApplyResult:
+    result = top_n_overall(
+        df,
+        op["value_column"],
+        n=op.get("n", 5),
+        ascending=op.get("ascending", False),
+        profile=profile,
+    )
+    return _result_df(result)
+
+
+def _apply_multi_summary(df: pd.DataFrame, op: dict, profile: dict, context: dict) -> ApplyResult:
+    summary = context.get("file_summary") or build_multi_file_summary(df, profile=profile)
+    context["file_summary"] = summary
+    return ApplyResult(df=None, message="multi_summary", stats=summary)
+
+
 _DISPATCH: dict[str, OperationHandler] = {
     "filter": _apply_filter,
     "sort": _apply_sort,
@@ -189,6 +248,12 @@ _DISPATCH: dict[str, OperationHandler] = {
     "clarify": _apply_clarify,
     "exclude_summary": _apply_exclude_summary,
     "filter_row_type": _apply_filter_row_type,
+    "combine_dataset": _apply_combine_dataset,
+    "summarize_by_file": _apply_summarize_by_file,
+    "compare_item_across_files": _apply_compare_item,
+    "top_n_by_file": _apply_top_n_by_file,
+    "top_n_overall": _apply_top_n_overall,
+    "multi_summary": _apply_multi_summary,
 }
 
 
@@ -196,6 +261,7 @@ def apply_operation(
     df: pd.DataFrame,
     operation: dict,
     profile: dict | None = None,
+    context: dict | None = None,
 ) -> ApplyResult:
     op_type = operation.get("type")
     if op_type not in _SUPPORTED_TYPES:
@@ -207,4 +273,15 @@ def apply_operation(
     if profile is None:
         from core.profiler import profile_dataframe
         profile = profile_dataframe(df)
-    return _DISPATCH[op_type](df, operation, profile)
+    ctx = context or {}
+    handler = _DISPATCH[op_type]
+    if op_type in (
+        "combine_dataset",
+        "summarize_by_file",
+        "compare_item_across_files",
+        "top_n_by_file",
+        "top_n_overall",
+        "multi_summary",
+    ):
+        return handler(df, operation, profile, ctx)
+    return handler(df, operation, profile)

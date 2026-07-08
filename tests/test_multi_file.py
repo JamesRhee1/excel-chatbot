@@ -5,8 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from agent.multi_executor import run_multi
-from agent.multi_router import route_multi_query
+from agent.executor import run
+from agent.router import route_query
 from domains.registry import apply_derived_metrics
 from core.dataset_builder import build_combined_dataset
 from core.multi_operations import (
@@ -162,33 +162,33 @@ def test_build_multi_file_summary(combined_df, normalized_budget_profile):
 # --- multi_router ---
 
 
-def test_route_multi_query_combine():
-    intent = route_multi_query("이 파일들 통합해줘")
+def test_route_multi_query_combine(normalized_budget_profile):
+    intent = route_query("이 파일들 통합해줘", normalized_budget_profile)
     assert intent is not None
     assert intent["operations"][0]["type"] == "combine_dataset"
 
 
-def test_route_multi_query_compare_item():
-    intent = route_multi_query("인쇄비를 파일별로 비교해줘")
+def test_route_multi_query_compare_item(normalized_budget_profile):
+    intent = route_query("인쇄비를 파일별로 비교해줘", normalized_budget_profile)
     assert intent is not None
     assert intent["operations"][0]["type"] == "compare_item_across_files"
     assert intent["operations"][0]["item_query"] == "인쇄비"
 
 
 def test_route_multi_query_summarize(normalized_budget_profile):
-    intent = route_multi_query("파일별 당년도예산 합계 비교해줘", normalized_budget_profile)
+    intent = route_query("파일별 당년도예산 합계 비교해줘", normalized_budget_profile)
     assert intent is not None
     assert intent["operations"][0]["type"] == "summarize_by_file"
 
 
 def test_route_multi_query_top_n_by_file(normalized_budget_profile):
-    intent = route_multi_query("각 파일에서 당년도예산이 가장 높은 항목 알려줘", normalized_budget_profile)
+    intent = route_query("각 파일에서 당년도예산이 가장 높은 항목 알려줘", normalized_budget_profile)
     assert intent is not None
     assert intent["operations"][0]["type"] == "top_n_by_file"
 
 
 def test_route_multi_query_top_n_overall(normalized_budget_profile):
-    intent = route_multi_query("전체 파일에서 예산잔액이 가장 큰 항목 5개 보여줘", normalized_budget_profile)
+    intent = route_query("전체 파일에서 예산잔액이 가장 큰 항목 5개 보여줘", normalized_budget_profile)
     assert intent is not None
     assert intent["operations"][0]["type"] == "top_n_overall"
     assert intent["operations"][0]["n"] == 5
@@ -198,7 +198,7 @@ def test_route_multi_query_top_n_overall(normalized_budget_profile):
 
 
 def test_run_multi_combine_dataset(two_file_results):
-    result = run_multi(two_file_results, "통합자료 만들어줘")
+    result = run(user_message="통합자료 만들어줘", file_results=two_file_results)
     assert result["success"]
     assert result["combined_df"] is not None
     assert len(result["combined_df"]) > 0
@@ -206,7 +206,7 @@ def test_run_multi_combine_dataset(two_file_results):
 
 
 def test_run_multi_compare_printing(two_file_results):
-    result = run_multi(two_file_results, "인쇄비를 파일별로 비교해줘")
+    result = run(user_message="인쇄비를 파일별로 비교해줘", file_results=two_file_results)
     assert result["success"]
     assert "인쇄비" in result["message"]
     assert "4예실대비표.xlsx" in result["message"]

@@ -106,7 +106,7 @@ def test_run_unsupported_operation_type(mock_parse_intent, sample_excel: str) ->
     result = run(sample_excel, "피벗 테이블")
 
     assert result["success"] is False
-    assert "지원하지 않는 operation type" in result["error"]
+    assert "지원하지 않는 작업 type" in result["error"]
 
 
 @patch("agent.executor.parse_intent")
