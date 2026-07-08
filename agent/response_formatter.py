@@ -466,11 +466,14 @@ def format_user_response(
         direction = "오름차순" if sort_op.get("ascending", True) else "내림차순"
         message = f"{col} 기준 {direction} 정렬 결과입니다."
     elif primary == "filter" and raw_df is not None:
-        message = (
-            "조건에 맞는 행을 찾지 못했습니다."
-            if raw_df.empty
-            else f"조건에 맞는 {len(raw_df)}개 항목입니다."
-        )
+        if raw_df.empty:
+            filter_op = next((op for op in operations if op.get("type") == "filter"), {})
+            col = resolved.get(filter_op.get("column", ""), filter_op.get("column", ""))
+            op_sym = filter_op.get("op", "")
+            value = filter_op.get("value", "")
+            message = f"조건에 맞는 행이 0건입니다. (적용 조건: {col} {op_sym} {value})"
+        else:
+            message = f"조건에 맞는 {len(raw_df)}개 항목입니다."
     elif primary == "filter_row_type" and raw_df is not None and not raw_df.empty:
         row_types = next(
             (op.get("row_types", []) for op in operations if op.get("type") == "filter_row_type"),
@@ -488,10 +491,11 @@ def format_user_response(
     analysis_types = {"top_n", "sort", "aggregate", "value_answer", "lookup", "filter"}
     had_analysis = any(op.get("type") in analysis_types for op in operations)
     if had_analysis and (raw_df is None or (isinstance(raw_df, pd.DataFrame) and raw_df.empty)):
-        message = (
-            "요청하신 조건에 맞는 데이터를 찾지 못했습니다. "
-            "질문을 조금 더 구체적으로 바꿔 주세요."
-        )
+        if primary != "filter":
+            message = (
+                "요청하신 조건에 맞는 데이터를 찾지 못했습니다. "
+                "질문을 조금 더 구체적으로 바꿔 주세요."
+            )
 
     if not message:
         if raw_df is not None and not raw_df.empty:

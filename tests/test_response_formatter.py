@@ -126,6 +126,52 @@ def test_full_detail_shows_all_columns(normalized_budget_df, normalized_budget_p
     assert len(display_df.columns) > 6
 
 
+def test_filter_zero_rows_message(normalized_budget_df, normalized_budget_profile):
+    intent = {
+        "answer_type": "dataframe",
+        "operations": [
+            {"type": "filter_row_type", "row_types": ["상세"]},
+            {"type": "filter", "column": "당년도예산", "op": ">", "value": 9_999_999_999},
+        ],
+    }
+    empty = normalized_budget_df.iloc[0:0].copy()
+    execution = {
+        "df": empty,
+        "resolved_columns": {"당년도예산": "당년도예산"},
+        "debug_logs": [],
+    }
+    message, _, _ = format_user_response(
+        "당년도예산 9999999999보다 큰 항목",
+        intent,
+        execution,
+        normalized_budget_profile,
+    )
+    assert "조건에 맞는 행이 0건입니다" in message
+    assert "당년도예산" in message
+    assert "> 9999999999" in message or "> 9999999999.0" in message
+    assert "질문을 조금 더 구체적으로" not in message
+
+
+def test_lookup_empty_keeps_clarify_message(normalized_budget_df, normalized_budget_profile):
+    intent = {
+        "answer_type": "dataframe",
+        "operations": [
+            {"type": "filter_row_type", "row_types": ["상세"]},
+            {"type": "lookup", "query": "없는항목xyz123"},
+        ],
+    }
+    empty = normalized_budget_df.iloc[0:0].copy()
+    execution = {"df": empty, "resolved_columns": {}, "debug_logs": []}
+    message, _, _ = format_user_response(
+        "없는항목xyz123 찾아줘",
+        intent,
+        execution,
+        normalized_budget_profile,
+    )
+    assert "요청하신 조건에 맞는 데이터를 찾지 못했습니다" in message
+    assert "질문을 조금 더 구체적으로" in message
+
+
 @patch("llm.intent.chat")
 def test_executor_value_answer_no_internal_logs(mock_chat, budget_xlsx):
     mock_chat.side_effect = AssertionError("router should handle this")
