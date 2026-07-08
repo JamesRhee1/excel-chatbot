@@ -84,8 +84,10 @@ def _emit_run_trace(
     )
 
 
-def _attach_trace_id(result: dict, trace_id: str) -> dict:
+def _attach_trace_id(result: dict, trace_id: str, *, route_path: str | None = None) -> dict:
     result["trace_id"] = trace_id
+    if route_path is not None:
+        result["route_path"] = route_path
     return result
 
 
@@ -304,7 +306,7 @@ def run(
         output_rows=output_rows,
         output_columns=output_columns,
     )
-    return _attach_trace_id(result, trace_id)
+    return _attach_trace_id(result, trace_id, route_path=route_path)
 
 
 def _apply_operations_workspace(

@@ -18,3 +18,9 @@ build/
 # Temp uploads
 upload_*.xlsx
 *.bak_*
+
+# Execution traces (local JSONL)
+traces/
+
+# Eval run outputs
+evals/results_*.json

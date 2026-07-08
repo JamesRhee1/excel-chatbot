@@ -1,0 +1,142 @@
+queries:
+  # --- 규칙 경로 (12) ---
+  - id: rule_help
+    query: "니가 할 수 있는게 뭐야"
+    fixture: generic_sales.xlsx
+    expected_route: rule
+    expected_ops: [help]
+
+  - id: rule_describe
+    query: "데이터에 대해서 설명해줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [describe_dataset]
+
+  - id: rule_top_n
+    query: "매출이 가장 높은 행 찾아줘"
+    fixture: generic_sales.xlsx
+    expected_route: rule
+    expected_ops: [exclude_summary, top_n]
+    expected_answer:
+      row_count: 1
+
+  - id: rule_filter
+    query: "매출이 1500보다 큰 행 보여줘"
+    fixture: generic_sales.xlsx
+    expected_route: rule
+    expected_ops: [exclude_summary, filter]
+    expected_answer:
+      row_count: 2
+
+  - id: rule_sort
+    query: "매출 기준으로 큰 순서대로 보여줘"
+    fixture: generic_sales.xlsx
+    expected_route: rule
+    expected_ops: [exclude_summary, sort]
+    expected_answer:
+      row_count: 5
+
+  - id: rule_aggregate
+    query: "부서별 매출 합계"
+    fixture: generic_sales.xlsx
+    expected_route: rule
+    expected_ops: [exclude_summary, aggregate]
+    expected_answer:
+      row_count: 3
+
+  - id: rule_derive_subtract
+    query: "예산잔액에서 가집행금액 뺀 값 컬럼 만들어줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [derive]
+    expected_answer:
+      row_count: 4
+
+  - id: rule_derive_percent
+    query: "가집행금액 대비 예산잔액 비율"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [derive]
+    expected_answer:
+      row_count: 4
+
+  - id: rule_value_answer
+    query: "인쇄비가 얼마지"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type, value_answer]
+    expected_answer:
+      row_count: 1
+
+  - id: rule_chain_top_n
+    query: "당년도예산 중에 가장 높은 값인 행을 찾아줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type, top_n]
+    expected_answer:
+      row_count: 1
+
+  - id: rule_total_row
+    query: "합계 알려줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type]
+    expected_answer:
+      row_count: 1
+
+  - id: rule_lookup
+    query: "회의비 찾아줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type, lookup]
+    expected_answer:
+      row_count: 1
+
+  # --- LLM 경로 (8) ---
+  - id: llm_select_columns
+    query: "이름, 매출 두 컬럼만 선택해줘"
+    fixture: generic_sales.xlsx
+    expected_route: llm
+    expected_ops: [select]
+
+  - id: llm_filter_sort_chain
+    query: "영업부 사람들만 매출 순으로 정리해줘"
+    fixture: generic_sales.xlsx
+    expected_route: llm
+    expected_ops: [filter, sort]
+
+  - id: llm_clarify_vague
+    query: "좀 정리해줘"
+    fixture: generic_sales.xlsx
+    expected_route: llm
+    expected_ops: [clarify]
+
+  - id: llm_clarify_importance
+    query: "이 데이터 뭐가 중요한지 알려줘"
+    fixture: generic_sales.xlsx
+    expected_route: llm
+    expected_ops: [clarify]
+
+  - id: llm_complex_filter
+    query: "매출 평균보다 높은 사람만 필터링해줘"
+    fixture: generic_sales.xlsx
+    expected_route: llm
+    expected_ops: [filter]
+
+  - id: llm_compare_rows
+    query: "김철수랑 이영희 비교해줘"
+    fixture: generic_sales.xlsx
+    expected_route: llm
+    expected_ops: [compare]
+
+  - id: llm_unsupported_pivot
+    query: "피벗 테이블 만들어줘"
+    fixture: generic_sales.xlsx
+    expected_route: llm
+    expected_ops: [clarify]
+
+  - id: llm_anomaly_check
+    query: "뭔가 이상한 값 있어?"
+    fixture: budget_comparison.xlsx
+    expected_route: llm
+    expected_ops: [clarify]

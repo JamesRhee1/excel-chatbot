@@ -21,6 +21,7 @@ dependencies = [
 ollama = ["ollama>=0.3.0"]
 dev = [
     "pytest>=7.0.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.urls]
