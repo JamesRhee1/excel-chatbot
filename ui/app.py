@@ -85,6 +85,8 @@ def _format_operation(op: dict) -> str:
         "top_n_overall": lambda o: f"전체 상위 — `{o.get('value_column', '')}`",
         "multi_summary": lambda o: "다중 파일 요약",
         "clarify": lambda o: "답변 불가",
+        "codegen_proposal": lambda o: "생성 코드 검토 대기",
+        "codegen": lambda o: "승인된 코드 실행",
     }
     fn = mapping.get(op_type)
     return fn(op) if fn else str(op)
@@ -243,12 +245,59 @@ def _render_verification_badge(verification: list[dict]) -> None:
                     st.caption(f"- {check['name']}: {check['detail']}")
 
 
-def _render_chat_history() -> None:
-    for message in st.session_state.messages:
+def _render_codegen_approval(message: dict, idx: int, model: str) -> None:
+    if not message.get("codegen_pending"):
+        return
+    st.code(message.get("generated_code", ""), language="python")
+    col_run, col_cancel = st.columns(2)
+    if col_run.button("실행", key=f"codegen_run_{idx}"):
+        _execute_approved_codegen(
+            message.get("generated_code", ""),
+            message.get("codegen_user_message", ""),
+            model,
+        )
+        message["codegen_pending"] = False
+        st.rerun()
+    if col_cancel.button("취소", key=f"codegen_cancel_{idx}"):
+        message["codegen_pending"] = False
+        message["content"] = "코드 실행을 취소했습니다."
+        st.rerun()
+
+
+def _execute_approved_codegen(code: str, user_message: str, model: str) -> None:
+    ws = st.session_state.get("workspace")
+    if ws is None:
+        st.session_state.messages.append(
+            {"role": "assistant", "content": "실행할 데이터가 없습니다. 파일을 다시 업로드하세요."}
+        )
+        return
+    with st.spinner("승인된 코드를 실행하는 중..."):
+        result = run(
+            user_message=user_message,
+            model=model,
+            workspace=ws,
+            approved_codegen_code=code,
+        )
+    if result.get("workspace") is not None:
+        st.session_state.workspace = result["workspace"]
+    if result["success"]:
+        _append_assistant_message(result)
+    else:
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": _format_error_message(result.get("error") or "코드 실행 실패"),
+            }
+        )
+
+
+def _render_chat_history(model: str = MODEL_OPTIONS[0]) -> None:
+    for idx, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message["role"] == "assistant":
                 _render_verification_badge(message.get("verification") or [])
+                _render_codegen_approval(message, idx, model)
             if message.get("dataframe") is not None:
                 st.dataframe(message["dataframe"], use_container_width=True)
             if message.get("raw_df") is not None:
@@ -325,7 +374,18 @@ def _process_user_message(user_message: str, model: str) -> None:
     if result.get("workspace") is not None:
         st.session_state.workspace = result["workspace"]
 
-    if result["success"]:
+    if result.get("codegen_pending"):
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": result.get("message") or "생성된 코드를 검토해 주세요.",
+                "generated_code": result.get("generated_code", ""),
+                "codegen_pending": True,
+                "codegen_user_message": result.get("codegen_user_message", user_message),
+                "operations_summary": _operations_summary(result.get("operations", [])),
+            }
+        )
+    elif result["success"]:
         _append_assistant_message(result)
     else:
         st.session_state.messages.append(
@@ -394,7 +454,7 @@ def main() -> None:
         else:
             _render_single_profile_summary()
         st.divider()
-        _render_chat_history()
+        _render_chat_history(model)
         if prompt := st.chat_input("Excel에 대해 요청하세요..."):
             _process_user_message(prompt, model)
             st.rerun()

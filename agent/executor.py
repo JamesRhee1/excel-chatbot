@@ -16,6 +16,7 @@ from core.table_operations import build_multi_file_summary
 from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, validate_pipeline
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
+from core.sandbox_runner import CODEGEN_WARNING, SandboxError, is_codegen_enabled, run_sandbox
 from core.workspace import LAST_RESULT_TABLE, Workspace
 from core.trace import TraceRecord, TraceWriter, new_trace_id, utc_timestamp
 from core.verification import verify_operation
@@ -91,6 +92,43 @@ def _attach_trace_id(result: dict, trace_id: str, *, route_path: str | None = No
     return result
 
 
+def _is_clarify_only(intent: dict) -> bool:
+    operations = intent.get("operations") or []
+    return bool(operations) and all(op.get("type") == "clarify" for op in operations)
+
+
+def _codegen_pending_result(
+    code: str,
+    *,
+    workspace: Workspace,
+    profile: dict,
+    user_message: str,
+) -> dict:
+    return {
+        "success": True,
+        "answer_type": "codegen_pending",
+        "message": (
+            "표준 연산으로 처리할 수 없어 pandas 코드를 생성했습니다. "
+            "코드를 검토한 뒤 [실행] 또는 [취소]를 선택하세요."
+        ),
+        "df": None,
+        "raw_df": None,
+        "combined_df": None,
+        "operations": [{"type": "codegen_proposal"}],
+        "debug_logs": [],
+        "profile": _profile_summary(profile),
+        "file_summary": None,
+        "saved_path": None,
+        "backup_path": None,
+        "workspace": workspace,
+        "verification": [],
+        "codegen_pending": True,
+        "generated_code": code,
+        "codegen_user_message": user_message,
+        "error": None,
+    }
+
+
 def run(
     file_path: str | None = None,
     user_message: str = "",
@@ -100,6 +138,7 @@ def run(
     sheet_name: str | int = 0,
     file_results: list[dict] | None = None,
     workspace: Workspace | None = None,
+    approved_codegen_code: str | None = None,
 ) -> dict:
     trace_id = new_trace_id()
     started = time.perf_counter()
@@ -163,17 +202,59 @@ def run(
 
             intent = route_query(user_message, profile) or {}
             route_path = "rule" if intent else "llm"
-            if not intent:
+            if approved_codegen_code:
+                pass
+            elif not intent:
                 intent = parse_intent(user_message, profile, model=model)
-            intent = prepend_exclude_summary(intent, user_message, profile)
-            intent = _apply_context_source(intent, user_message)
+            if not approved_codegen_code:
+                intent = prepend_exclude_summary(intent, user_message, profile)
+                intent = _apply_context_source(intent, user_message)
 
             table = ws.get(default_table)
             if table and table.df is not None:
                 input_rows = len(table.df)
                 input_columns = list(table.df.columns.astype(str))
 
-            if dry_run:
+            if approved_codegen_code:
+                if not is_codegen_enabled():
+                    result = _error_result("코드 실행은 EXCEL_CHATBOT_ENABLE_CODEGEN=1 일 때만 허용됩니다.")
+                elif table is None or table.df is None:
+                    result = _error_result("코드 실행에 사용할 데이터가 없습니다.")
+                else:
+                    route_path = "codegen"
+                    operations_applied = [{"type": "codegen"}]
+                    try:
+                        output_df = run_sandbox(approved_codegen_code, table.df)
+                    except SandboxError as exc:
+                        result = _error_result(str(exc))
+                    else:
+                        result_domain = profile.get("domain", "generic")
+                        ws.upsert_table(
+                            LAST_RESULT_TABLE,
+                            output_df,
+                            source="codegen",
+                            domain=result_domain,
+                            profile=profile_dataframe(output_df, domain=result_domain),
+                        )
+                        output_rows = len(output_df)
+                        output_columns = list(output_df.columns.astype(str))
+                        message = f"{CODEGEN_WARNING}\n\n코드 실행이 완료되었습니다. ({len(output_df)}행)"
+                        result = _success_result(
+                            answer_type="dataframe",
+                            df=output_df,
+                            raw_df=output_df,
+                            operations=operations_applied,
+                            message=message,
+                            profile=_profile_summary(profile),
+                            workspace=ws,
+                            verification=[],
+                        )
+                        intent = {
+                            "answer_type": "dataframe",
+                            "operations": operations_applied,
+                            "codegen": True,
+                        }
+            elif dry_run:
                 operations_applied = list(intent.get("operations") or [])
                 answer_type = intent.get("answer_type", "dataframe")
                 result = _success_result(
@@ -182,6 +263,65 @@ def run(
                     message=intent.get("message") or None,
                     profile=_profile_summary(profile),
                 )
+            elif (
+                is_codegen_enabled()
+                and _is_clarify_only(intent)
+            ):
+                from llm.codegen import generate_pandas_code
+
+                generated_code = generate_pandas_code(user_message, profile, model=model)
+                if generated_code:
+                    route_path = "llm"
+                    operations_applied = [{"type": "codegen_proposal"}]
+                    intent = {
+                        "answer_type": "codegen_pending",
+                        "operations": operations_applied,
+                        "codegen_proposal": True,
+                    }
+                    result = _codegen_pending_result(
+                        generated_code,
+                        workspace=ws,
+                        profile=profile,
+                        user_message=user_message,
+                    )
+                else:
+                    validate_pipeline(intent["operations"], ws)
+                    context = {
+                        "combined_df": combined_df if combined_df is not None else (table.df if table else None),
+                        "file_summary": file_summary,
+                    }
+                    execution = _apply_operations_workspace(
+                        ws,
+                        intent["operations"],
+                        default_table=default_table,
+                        context=context,
+                    )
+                    operations_applied = execution.get("applied", [])
+                    per_op_ms = execution.get("per_op_ms", [])
+                    verification_summaries = [
+                        report["summary"] for report in execution.get("verification", [])
+                    ]
+                    route_path = "llm_fallback_clarify"
+                    message, display_df, raw_df = format_user_response(
+                        user_message,
+                        intent,
+                        execution,
+                        profile,
+                        combined_df=context.get("combined_df"),
+                        file_summary=context.get("file_summary"),
+                    )
+                    answer_type = "message"
+                    result = _success_result(
+                        answer_type=answer_type,
+                        df=display_df,
+                        raw_df=raw_df,
+                        operations=operations_applied,
+                        message=message,
+                        debug_logs=execution.get("debug_logs", []),
+                        profile=_profile_summary(profile),
+                        workspace=ws,
+                        verification=execution.get("verification", []),
+                    )
             else:
                 validate_pipeline(intent["operations"], ws)
 

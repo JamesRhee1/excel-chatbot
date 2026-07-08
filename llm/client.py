@@ -22,25 +22,80 @@ def chat(
     user_message: str,
     model: str | None = None,
 ) -> str:
-    """Send a chat request to a local Ollama model.
-
-    Args:
-        system_prompt: System instruction for the model.
-        user_message: User message text.
-        model: Ollama model name (default: OLLAMA_MODEL env or qwen2.5:7b).
-
-    Returns:
-        Assistant response text.
-
-    Raises:
-        OllamaConnectionError: If the Ollama server is unreachable.
-        OllamaModelNotFoundError: If the model is not installed locally.
-    """
+    """Send a chat request expecting JSON-formatted output."""
     resolved_model = model or DEFAULT_MODEL
     try:
         return _chat_via_ollama_lib(system_prompt, user_message, resolved_model)
     except ImportError:
         return _chat_via_requests(system_prompt, user_message, resolved_model)
+
+
+def chat_plain(
+    system_prompt: str,
+    user_message: str,
+    model: str | None = None,
+) -> str:
+    """Send a chat request expecting plain-text output."""
+    resolved_model = model or DEFAULT_MODEL
+    try:
+        return _chat_plain_via_ollama_lib(system_prompt, user_message, resolved_model)
+    except ImportError:
+        return _chat_plain_via_requests(system_prompt, user_message, resolved_model)
+
+
+def _chat_plain_via_ollama_lib(system_prompt: str, user_message: str, model: str) -> str:
+    import ollama
+
+    try:
+        response = ollama.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            options={"temperature": 0},
+        )
+    except Exception as exc:
+        raise _wrap_ollama_error(exc, model) from exc
+
+    return response["message"]["content"]
+
+
+def _chat_plain_via_requests(system_prompt: str, user_message: str, model: str) -> str:
+    import requests
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "stream": False,
+        "options": {"temperature": 0},
+    }
+
+    try:
+        response = requests.post(OLLAMA_CHAT_URL, json=payload, timeout=120)
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError as exc:
+        raise OllamaConnectionError(
+            "Ollama 서버에 연결할 수 없습니다. "
+            "터미널에서 'ollama serve'가 실행 중인지 확인하세요."
+        ) from exc
+    except requests.exceptions.Timeout as exc:
+        raise OllamaConnectionError(
+            "Ollama 서버 응답 시간이 초과되었습니다. "
+            "서버가 실행 중인지 확인하거나 더 작은 모델을 사용해 보세요."
+        ) from exc
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            raise _model_not_found_error(model) from exc
+        raise OllamaConnectionError(f"Ollama API 호출 실패: {exc}") from exc
+    except requests.exceptions.RequestException as exc:
+        raise OllamaConnectionError(f"Ollama API 호출 실패: {exc}") from exc
+
+    data = response.json()
+    return data["message"]["content"]
 
 
 def _chat_via_ollama_lib(system_prompt: str, user_message: str, model: str) -> str:
