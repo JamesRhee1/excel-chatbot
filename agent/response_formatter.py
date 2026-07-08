@@ -227,6 +227,32 @@ def _format_top_n_message(
     return intro + body
 
 
+def _derive_ranking_message(operations: list[dict], resolved: dict, *, primary: str) -> str | None:
+    derive_op = next((op for op in operations if op.get("type") == "derive"), None)
+    if not derive_op:
+        return None
+    rank_op = next((op for op in operations if op.get("type") == primary), None)
+    if not rank_op:
+        return None
+
+    left = resolved.get(str(derive_op.get("left", "")), str(derive_op.get("left", "")))
+    right_raw = derive_op.get("right", "")
+    right = resolved.get(str(right_raw), str(right_raw))
+    if derive_op.get("op") in {"divide", "percent"}:
+        if primary == "top_n":
+            n = rank_op.get("n", 1)
+            return f"{left}/{right} 비율 기준 상위 {n}개입니다."
+        direction = "오름차순" if rank_op.get("ascending", True) else "내림차순"
+        return f"{left}/{right} 비율 기준 {direction} 정렬 결과입니다."
+
+    new_col = derive_op.get("new_column", "파생 컬럼")
+    if primary == "top_n":
+        n = rank_op.get("n", 1)
+        return f"{new_col} 기준 상위 {n}개입니다."
+    direction = "오름차순" if rank_op.get("ascending", True) else "내림차순"
+    return f"{new_col} 기준 {direction} 정렬 결과입니다."
+
+
 def _format_describe_message(df: pd.DataFrame, profile: dict) -> str:
     if profile.get("domain_describe_label"):
         name_cols = profile.get("domain_name_columns") or profile.get("likely_name_columns", [])
@@ -431,6 +457,11 @@ def format_user_response(
         return intent["message"], raw_df, raw_df
 
     primary = _primary_operation(operations)
+    if primary == "derive":
+        if any(op.get("type") == "top_n" for op in operations):
+            primary = "top_n"
+        elif any(op.get("type") == "sort" for op in operations):
+            primary = "sort"
     message = ""
 
     if primary in _MULTI_OP_TYPES:
@@ -451,8 +482,12 @@ def format_user_response(
     if primary == "value_answer" and value_metadata:
         message = _format_value_answer_message(value_metadata, user_query, profile)
     elif primary == "top_n" and raw_df is not None and not raw_df.empty:
-        top_op = next(op for op in operations if op.get("type") == "top_n")
-        message = _format_top_n_message(top_op, raw_df, profile, resolved)
+        derive_message = _derive_ranking_message(operations, resolved, primary="top_n")
+        if derive_message:
+            message = derive_message
+        else:
+            top_op = next(op for op in operations if op.get("type") == "top_n")
+            message = _format_top_n_message(top_op, raw_df, profile, resolved)
     elif primary == "describe_dataset":
         message = _format_describe_message(raw_df if raw_df is not None else pd.DataFrame(), profile)
     elif primary == "help":
@@ -463,12 +498,16 @@ def format_user_response(
         groups = [resolved.get(g, g) for g in agg_op.get("group_by", [])]
         message = f"{', '.join(groups)} 기준 {agg_col} {agg_op.get('agg_func', 'sum')} 결과입니다."
     elif primary == "sort" and raw_df is not None and not raw_df.empty:
-        sort_op = next(op for op in operations if op.get("type") == "sort")
-        col = resolved.get(sort_op.get("column", ""), sort_op.get("column", ""))
-        direction = "오름차순" if sort_op.get("ascending", True) else "내림차순"
-        message = f"{col} 기준 {direction} 정렬 결과입니다."
-        if sort_op.get("_auto_selected_column"):
-            message += f"\n정렬 기준: {col} (자동 선택)"
+        derive_message = _derive_ranking_message(operations, resolved, primary="sort")
+        if derive_message:
+            message = derive_message
+        else:
+            sort_op = next(op for op in operations if op.get("type") == "sort")
+            col = resolved.get(sort_op.get("column", ""), sort_op.get("column", ""))
+            direction = "오름차순" if sort_op.get("ascending", True) else "내림차순"
+            message = f"{col} 기준 {direction} 정렬 결과입니다."
+            if sort_op.get("_auto_selected_column"):
+                message += f"\n정렬 기준: {col} (자동 선택)"
     elif primary == "filter" and raw_df is not None:
         if raw_df.empty:
             filter_op = next((op for op in operations if op.get("type") == "filter"), {})

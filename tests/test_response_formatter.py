@@ -188,6 +188,46 @@ def test_display_dataframe_resets_index(normalized_budget_df, normalized_budget_
     assert display_df.index.tolist() == [0, 1]
 
 
+def test_derive_top_n_message_summarizes_ratio(normalized_budget_df, normalized_budget_profile):
+    working = normalized_budget_df[normalized_budget_df["행구분"] == "상세"].copy()
+    working["수익률"] = working["당년도집행"] / working["당년도예산"]
+    top_df = working.nlargest(1, "수익률")
+    intent = {
+        "operations": [
+            {"type": "derive", "new_column": "수익률", "left": "당년도집행", "op": "divide", "right": "당년도예산"},
+            {"type": "top_n", "column": "수익률", "n": 1, "ascending": False},
+        ]
+    }
+    execution = {"df": top_df, "resolved_columns": {}, "debug_logs": []}
+    message, _, _ = format_user_response(
+        "수익률이 가장 높은 행",
+        intent,
+        execution,
+        normalized_budget_profile,
+    )
+    assert message == "당년도집행/당년도예산 비율 기준 상위 1개입니다."
+
+
+def test_derive_sort_message_summarizes_ratio(normalized_budget_df, normalized_budget_profile):
+    working = normalized_budget_df[normalized_budget_df["행구분"] == "상세"].copy()
+    working["수익률"] = working["당년도집행"] / working["당년도예산"]
+    sorted_df = working.sort_values("수익률", ascending=False)
+    intent = {
+        "operations": [
+            {"type": "derive", "new_column": "수익률", "left": "당년도집행", "op": "divide", "right": "당년도예산"},
+            {"type": "sort", "column": "수익률", "ascending": False},
+        ]
+    }
+    execution = {"df": sorted_df, "resolved_columns": {}, "debug_logs": []}
+    message, _, _ = format_user_response(
+        "수익률 기준 정렬",
+        intent,
+        execution,
+        normalized_budget_profile,
+    )
+    assert message == "당년도집행/당년도예산 비율 기준 내림차순 정렬 결과입니다."
+
+
 @patch("llm.intent.chat")
 def test_executor_value_answer_no_internal_logs(mock_chat, budget_xlsx):
     mock_chat.side_effect = AssertionError("router should handle this")
