@@ -6,7 +6,6 @@ import json
 import logging
 import re
 
-from agent.router import route_query
 from core.operations import normalize_filter_op
 from llm.client import chat
 
@@ -81,11 +80,6 @@ class IntentParseError(ValueError):
 
 
 def parse_intent(user_message: str, profile: dict, model: str | None = None) -> dict:
-    routed = route_query(user_message, profile)
-    if routed is not None:
-        _validate_intent(routed, profile)
-        return routed
-
     system_prompt = SYSTEM_PROMPT.format(
         column_names=json.dumps(profile.get("column_names", []), ensure_ascii=False),
         numeric_columns=json.dumps(profile.get("numeric_columns", []), ensure_ascii=False),
