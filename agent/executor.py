@@ -31,6 +31,19 @@ _CONTEXT_SOURCE_HINTS = ("직전 결과에서", "여기서", "이 중에서")
 _TRACE_WRITER = TraceWriter()
 
 
+def _default_data_table(ws: Workspace) -> str:
+    """Return the original uploaded/combined table, never last_result."""
+    if ws.get(DEFAULT_COMBINED_TABLE):
+        return DEFAULT_COMBINED_TABLE
+    if ws.get(DEFAULT_MAIN_TABLE):
+        return DEFAULT_MAIN_TABLE
+    for name in ws.list_tables():
+        if name != LAST_RESULT_TABLE:
+            return name
+    tables = ws.list_tables()
+    return tables[0] if tables else DEFAULT_MAIN_TABLE
+
+
 def _apply_context_source(intent: dict, user_message: str) -> dict:
     if not any(hint in user_message for hint in _CONTEXT_SOURCE_HINTS):
         return intent
@@ -187,11 +200,11 @@ def run(
         if not ws.list_tables():
             result = _error_result("분석할 데이터가 없습니다.")
         else:
-            if ws.get(LAST_RESULT_TABLE) and not file_path and not file_results:
-                default_table = LAST_RESULT_TABLE
-                last_table = ws.get(LAST_RESULT_TABLE)
-                if last_table:
-                    profile = last_table.profile
+            if not file_path and not file_results:
+                default_table = _default_data_table(ws)
+                table = ws.get(default_table)
+                if table:
+                    profile = table.profile
             elif not profile:
                 table = ws.get(default_table)
                 profile = table.profile if table else {}

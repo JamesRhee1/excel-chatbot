@@ -22,6 +22,28 @@ def test_route_context_top_n_sets_last_result_source() -> None:
     assert intent["operations"][0]["n"] == 2
 
 
+def test_followup_without_context_uses_original_table() -> None:
+    ws = Workspace()
+    df = pd.DataFrame(
+        {
+            "비목분류": ["운영비", "장비비", "회의비", "합계"],
+            "비용명": ["인쇄비", "서버", "회의비", "합계"],
+            "당년도예산": [1200, 7000, 900, 9100],
+        }
+    )
+    profile = profile_dataframe(df, domain="generic")
+    ws.upsert_table("main", df, "budget.xlsx", profile=profile, domain="generic")
+
+    first = run(user_message="당년도예산 가장 높은 행 찾아줘", workspace=ws)
+    assert first["success"]
+    assert len(first["raw_df"]) == 1
+
+    second = run(user_message="당년도예산 기준으로 큰 순서대로", workspace=ws)
+    assert second["success"]
+    assert second["raw_df"] is not None
+    assert len(second["raw_df"]) == 3
+
+
 def test_followup_top_n_uses_last_result() -> None:
     ws = Workspace()
     df = pd.DataFrame(
