@@ -509,7 +509,9 @@ def format_user_response(
 
     display_df = select_display_df(raw_df, user_query, intent, profile, resolved)
     if wants_full_detail(user_query):
-        display_df = raw_df
+        display_df = raw_df.copy() if raw_df is not None else None
+    if isinstance(display_df, pd.DataFrame):
+        display_df = display_df.reset_index(drop=True)
 
     return message, display_df, raw_df
 

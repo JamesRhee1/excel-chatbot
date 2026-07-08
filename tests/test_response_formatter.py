@@ -172,6 +172,22 @@ def test_lookup_empty_keeps_clarify_message(normalized_budget_df, normalized_bud
     assert "질문을 조금 더 구체적으로" in message
 
 
+def test_display_dataframe_resets_index(normalized_budget_df, normalized_budget_profile):
+    intent = {"operations": [{"type": "sort", "column": "당년도예산", "ascending": False}]}
+    sorted_df = normalized_budget_df.sort_values("당년도예산", ascending=False).head(2)
+    execution = {"df": sorted_df, "resolved_columns": {}, "debug_logs": []}
+    _, display_df, raw_df = format_user_response(
+        "당년도예산 기준으로 정렬",
+        intent,
+        execution,
+        normalized_budget_profile,
+    )
+    assert raw_df is not None
+    assert display_df is not None
+    assert raw_df.index.tolist() != [0, 1]
+    assert display_df.index.tolist() == [0, 1]
+
+
 @patch("llm.intent.chat")
 def test_executor_value_answer_no_internal_logs(mock_chat, budget_xlsx):
     mock_chat.side_effect = AssertionError("router should handle this")
