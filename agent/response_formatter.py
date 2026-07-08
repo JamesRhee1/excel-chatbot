@@ -6,7 +6,8 @@ import re
 
 import pandas as pd
 
-from core.operations import _format_amount, build_help_message, describe_dataset_info
+from agent.presentation import analysis_examples, build_help_message
+from core.operations import _format_amount, describe_dataset_info
 from llm.intent import UNKNOWN_MESSAGE
 
 _FULL_DETAIL_KEYWORDS = ("자세히", "전체 컬럼", "모든 컬럼", "전체 보여", "모든 컬럼")
@@ -223,7 +224,7 @@ def _format_describe_message(df: pd.DataFrame, profile: dict) -> str:
     if info["unnamed_columns"]:
         lines.append(f"\n_Unnamed 컬럼 {len(info['unnamed_columns'])}개는 정규화가 필요할 수 있습니다._")
     lines.extend(["", "**질문 예시**"])
-    for ex in info["analysis_examples"][:4]:
+    for ex in analysis_examples(profile)[:4]:
         lines.append(f"- {ex}")
     return "\n".join(lines)
 
