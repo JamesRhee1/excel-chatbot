@@ -16,6 +16,7 @@ from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, valida
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
 from core.workspace import LAST_RESULT_TABLE, Workspace
+from core.verification import verify_operation
 from core.writer import save_excel
 from domains.registry import apply_derived_metrics
 from llm.client import OllamaConnectionError, OllamaModelNotFoundError
@@ -144,6 +145,14 @@ def run(
             file_summary=context.get("file_summary"),
         )
 
+        verification_reports = execution.get("verification", [])
+        failed_summaries = [
+            report["summary"] for report in verification_reports if not report.get("passed")
+        ]
+        if failed_summaries:
+            warning_block = "\n".join(f"⚠ 검증 경고: {summary}" for summary in failed_summaries)
+            message = f"{warning_block}\n\n{message}" if message else warning_block
+
         saved_path: str | None = None
         backup_path: str | None = None
         if output_path is not None and raw_df is not None:
@@ -177,6 +186,7 @@ def run(
             saved_path=saved_path,
             backup_path=backup_path,
             workspace=ws,
+            verification=verification_reports,
         )
 
     except (IntentParseError, PipelineValidationError) as exc:
@@ -208,6 +218,7 @@ def _apply_operations_workspace(
     applied: list[dict] = []
     produced_dataframe = False
     prev_output: str | None = None
+    verification: list[dict] = []
 
     for index, operation in enumerate(operations):
         spec = OPERATION_SPEC_BY_TYPE[operation["type"]]
@@ -227,6 +238,8 @@ def _apply_operations_workspace(
             current_df = table.df if table else pd.DataFrame()
             current_profile = table.profile if table else {}
 
+        input_df = current_df.copy()
+
         try:
             outcome = apply_operation(
                 current_df,
@@ -243,6 +256,16 @@ def _apply_operations_workspace(
         if outcome.get("stats") and operation.get("type") == "multi_summary":
             context["file_summary"] = outcome["stats"]
         if outcome.get("df") is not None:
+            verify_args = dict(operation)
+            if operation.get("type") == "exclude_summary":
+                verify_args["_profile"] = current_profile
+            report = verify_operation(
+                operation["type"],
+                input_df,
+                outcome["df"],
+                verify_args,
+            )
+            verification.append(report.to_dict())
             current_df = outcome["df"]
             produced_dataframe = True
             save_as = operation.get("save_as")
@@ -270,6 +293,7 @@ def _apply_operations_workspace(
         "resolved_columns": resolved_columns,
         "value_metadata": value_metadata,
         "applied": applied,
+        "verification": verification,
     }
 
 
@@ -296,6 +320,7 @@ def _success_result(
     saved_path: str | None = None,
     backup_path: str | None = None,
     workspace: Workspace | None = None,
+    verification: list[dict] | None = None,
 ) -> dict:
     return {
         "success": True,
@@ -311,6 +336,7 @@ def _success_result(
         "saved_path": saved_path,
         "backup_path": backup_path,
         "workspace": workspace,
+        "verification": verification or [],
         "error": None,
     }
 

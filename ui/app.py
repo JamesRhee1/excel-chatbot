@@ -222,10 +222,33 @@ def _handle_uploads(uploaded_files: list | None) -> None:
     st.session_state.combined_df = None
 
 
+def _render_verification_badge(verification: list[dict]) -> None:
+    if not verification:
+        return
+    registered = [v for v in verification if not v.get("checks") or v["checks"][0].get("name") != "등록 여부"]
+    if not registered:
+        return
+    passed_all = all(v.get("passed", True) for v in registered)
+    if passed_all:
+        check_count = sum(len(v.get("checks", [])) for v in registered)
+        st.caption(f"✓ 검증됨 ({check_count}개 검사 통과)")
+        return
+    with st.expander("⚠ 검증 경고"):
+        for report in registered:
+            if report.get("passed"):
+                continue
+            st.markdown(f"**{report.get('summary', '검증 실패')}**")
+            for check in report.get("checks", []):
+                if not check.get("passed"):
+                    st.caption(f"- {check['name']}: {check['detail']}")
+
+
 def _render_chat_history() -> None:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message["role"] == "assistant":
+                _render_verification_badge(message.get("verification") or [])
             if message.get("dataframe") is not None:
                 st.dataframe(message["dataframe"], use_container_width=True)
             if message.get("raw_df") is not None:
@@ -268,6 +291,7 @@ def _append_assistant_message(result: dict) -> None:
             "raw_df": raw_df,
             "combined_df": combined_df if combined_df is not None and display_df is not combined_df else None,
             "debug_logs": result.get("debug_logs", []),
+            "verification": result.get("verification", []),
         }
     )
 
