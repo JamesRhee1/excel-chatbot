@@ -311,12 +311,14 @@ def run(
             if approved_codegen_code:
                 pass
             elif not intent:
-                _, llm_profile = _resolve_llm_profile(
+                llm_source_name, llm_profile = _resolve_llm_profile(
                     user_message=user_message,
                     workspace=ws,
                     default_table=default_table,
                     fallback_profile=profile,
                 )
+                if any(hint in user_message for hint in _CONTEXT_SOURCE_HINTS):
+                    default_table = llm_source_name
                 profile = llm_profile
                 intent = parse_intent(user_message, llm_profile, model=model)
             if not approved_codegen_code:

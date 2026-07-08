@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import pandas as pd
 from unittest.mock import patch
 
@@ -123,3 +125,60 @@ def test_context_top_n_without_numeric_column_returns_clarify_error() -> None:
         result = run(user_message="이 중에서 상위 2개", workspace=ws)
     assert result["success"] is False
     assert "정렬 기준 컬럼을 자동으로 선택할 수 없습니다" in (result["error"] or "")
+
+
+def test_llm_profile_uses_current_source_table_after_derive(tmp_path: Path, monkeypatch) -> None:
+    trace_dir = tmp_path / "traces"
+    monkeypatch.setenv("EXCEL_CHATBOT_TRACE_DIR", str(trace_dir))
+    from agent import executor as executor_module
+
+    original_writer = executor_module._TRACE_WRITER
+    executor_module._TRACE_WRITER = executor_module.TraceWriter(trace_dir=trace_dir)
+
+    ws = Workspace()
+    df = pd.DataFrame(
+        {
+            "매출": [100, 300, 200],
+            "비용": [50, 120, 100],
+            "항목": ["a", "b", "c"],
+        }
+    )
+    profile = profile_dataframe(df, domain="generic")
+    ws.upsert_table("main", df, "sales.xlsx", profile=profile, domain="generic")
+
+    first_intent = {
+        "answer_type": "dataframe",
+        "operations": [
+            {"type": "derive", "new_column": "수익률", "left": "매출", "op": "divide", "right": "비용", "save_as": "calc"}
+        ],
+    }
+
+    def _parse_with_current_profile(user_message: str, profile_arg: dict, model=None):  # noqa: ARG001
+        assert "수익률" in profile_arg.get("numeric_columns", [])
+        assert "수익률" in profile_arg.get("sample_values_by_column", {})
+        return {
+            "answer_type": "dataframe",
+            "operations": [{"type": "sort", "column": "수익률", "ascending": False, "source": LAST_RESULT_TABLE}],
+            "message": "",
+        }
+
+    try:
+        with (
+            patch("agent.executor.route_query", side_effect=[first_intent, None]),
+            patch("agent.executor.parse_intent", side_effect=_parse_with_current_profile),
+        ):
+            first = run(user_message="매출 대비 비용 비율 컬럼 만들어줘", workspace=ws)
+            assert first["success"]
+            second = run(user_message="이 중에서 수익률 기준으로 정렬해줘", workspace=ws)
+    finally:
+        executor_module._TRACE_WRITER = original_writer
+
+    assert second["success"]
+    assert second["operations"][-1]["column"] == "수익률"
+    assert second["raw_df"] is not None
+    assert second["raw_df"]["수익률"].iloc[0] == max(second["raw_df"]["수익률"])
+
+    trace_files = sorted(trace_dir.glob("traces_*.jsonl"))
+    assert trace_files
+    payload = json.loads(trace_files[-1].read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert payload["intent"]["operations"][-1]["column"] == "수익률"
