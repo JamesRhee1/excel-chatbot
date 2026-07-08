@@ -36,7 +36,7 @@ Rules:
 - "<항목> 얼마" => value_answer
 - "데이터 설명" => describe_dataset
 - "할 수 있는 것" => help
-- aggregate ONLY with explicit group (e.g. "비목분류별")
+- aggregate ONLY with explicit group (e.g. "분류별")
 - NEVER aggregate without non-empty group_by
 - If unsure, return clarify with an honest message that you cannot answer confidently
 - NEVER return empty operations without clarify message
@@ -44,13 +44,23 @@ Rules:
 - Use exclude_summary implicitly via planner only when user asks to ignore total rows; executor auto-excludes 합계/소계 rows for ranking/sort/aggregate
 """
 
-UNKNOWN_MESSAGE = (
-    "죄송합니다. 이 질문에는 확실하게 답변드리기 어렵습니다.\n\n"
-    "업로드된 엑셀 파일 기준으로 아래처럼 다시 질문해 주시면 도움을 드릴 수 있습니다.\n"
-    "- '당년도예산이 가장 높은 행 찾아줘' (합계/소계 행은 자동 제외)\n"
-    "- '인쇄비가 얼마야?'\n"
-    "- '비목분류별 당년도예산 합계 보여줘'"
-)
+def clarify_message(profile: dict | None = None) -> str:
+    profile = profile or {}
+    examples = profile.get("domain_clarify_examples") or [
+        "'가장 높은 행 찾아줘'",
+        "'항목이 얼마야?'",
+        "'분류별 금액 합계 보여줘'",
+    ]
+    lines = [
+        "죄송합니다. 이 질문에는 확실하게 답변드리기 어렵습니다.",
+        "",
+        "업로드된 엑셀 파일 기준으로 아래처럼 다시 질문해 주시면 도움을 드릴 수 있습니다.",
+    ]
+    lines.extend(f"- {example}" for example in examples)
+    return "\n".join(lines)
+
+
+UNKNOWN_MESSAGE = clarify_message()
 _CLARIFY_FALLBACK = UNKNOWN_MESSAGE
 
 
@@ -72,7 +82,7 @@ def parse_intent(user_message: str, profile: dict, model: str | None = None) -> 
         raw_response = chat(system_prompt, user_message, model=model)
         intent = _extract_json(raw_response)
     except IntentParseError:
-        return _clarify_intent(_CLARIFY_FALLBACK)
+        return _clarify_intent(clarify_message(profile))
 
     try:
         _validate_intent(intent, profile)

@@ -28,7 +28,7 @@ Repository = "https://github.com/JamesRhee1/excel-chatbot"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "core*", "llm*"]
+include = ["agent*", "core*", "llm*", "domains*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

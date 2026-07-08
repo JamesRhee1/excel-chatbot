@@ -29,9 +29,12 @@ def is_summary_text(value) -> bool:
 
 
 def exclude_summary_rows(df: pd.DataFrame, profile: dict) -> pd.DataFrame:
-    """Remove summary/total rows — uses 행구분 for budget tables, heuristics otherwise."""
-    if "행구분" in df.columns:
-        return df[df["행구분"] == "상세"].copy()
+    """Remove summary/total rows — uses domain row-type config or heuristics."""
+    summary_cfg = profile.get("summary_row_config") or {}
+    row_type_col = summary_cfg.get("row_type_column")
+    detail_type = summary_cfg.get("detail_row_type")
+    if row_type_col and detail_type and row_type_col in df.columns:
+        return df[df[row_type_col] == detail_type].copy()
     check_cols: list[str] = list(
         dict.fromkeys(
             (profile.get("likely_name_columns") or [])
@@ -51,11 +54,18 @@ def exclude_summary_rows(df: pd.DataFrame, profile: dict) -> pd.DataFrame:
     return df.loc[mask].copy()
 
 
-def filter_row_types(df: pd.DataFrame, row_types: list[str]) -> pd.DataFrame:
-    """Filter rows by 행구분 values (예실대비표)."""
-    if "행구분" not in df.columns:
-        return df.copy()
-    return df[df["행구분"].isin(row_types)].copy()
+def filter_row_types(df: pd.DataFrame, row_types: list[str], profile: dict | None = None) -> pd.DataFrame:
+    """Filter rows by configured row-type column when present."""
+    profile = profile or {}
+    summary_cfg = profile.get("summary_row_config") or {}
+    row_type_col = summary_cfg.get("row_type_column")
+    if row_type_col and row_type_col in df.columns:
+        return df[df[row_type_col].isin(row_types)].copy()
+
+    detail_type = summary_cfg.get("detail_row_type")
+    if detail_type and row_types == [detail_type]:
+        return exclude_summary_rows(df, profile)
+    return df.copy()
 
 
 def describe_dataset_info(df: pd.DataFrame, profile: dict) -> dict:

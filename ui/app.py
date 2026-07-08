@@ -13,7 +13,7 @@ from agent.executor import run
 from agent.multi_executor import run_multi
 from core.multi_loader import load_multiple_excels
 from core.profiler import profile_dataframe
-from core.reader import load_excel
+from core.reader import load_excel, load_excel_with_domain, list_sheets, summarize
 
 MODEL_OPTIONS = [
     "qwen2.5:7b",
@@ -75,7 +75,7 @@ def _format_operation(op: dict) -> str:
         "value_answer": lambda o: f"금액 조회 — `{o.get('row_query', '')}`",
         "help": lambda o: "도움말",
         "exclude_summary": lambda o: "합계/소계 행 제외",
-        "filter_row_type": lambda o: f"행구분 필터 — {', '.join(o.get('row_types', []))}",
+        "filter_row_type": lambda o: f"행 유형 필터 — {', '.join(o.get('row_types', []))}",
         "combine_dataset": lambda o: "다중 파일 통합",
         "summarize_by_file": lambda o: f"파일별 집계 — `{o.get('value_column', '')}`",
         "compare_item_across_files": lambda o: f"파일별 항목 비교 — `{o.get('item_query', '')}`",
@@ -128,10 +128,9 @@ def _render_single_profile_summary() -> None:
         examples = [
             "데이터에 대해서 설명",
             "니가 할 수 있는게 뭐야",
-            "당해예산 중에 가장 높은 값인 행을 찾아줘",
-            "인쇄비가 얼마지",
         ]
-        if profile.get("likely_category_columns") and profile.get("likely_amount_columns"):
+        examples.extend(profile.get("domain_example_queries", [])[:4])
+        if not profile.get("domain_example_queries") and profile.get("likely_category_columns") and profile.get("likely_amount_columns"):
             examples.append(
                 f"{profile['likely_category_columns'][0]}별 "
                 f"{profile['likely_amount_columns'][0]} 합계 보여줘"
@@ -170,14 +169,15 @@ def _render_multi_profile_summary() -> None:
         st.dataframe(combined.head(10), use_container_width=True)
 
     with st.expander("다중 파일 질문 예시"):
-        for ex in [
-            "이 파일들 통합해줘",
-            "파일별 당년도예산 합계 비교해줘",
-            "인쇄비를 파일별로 비교해줘",
-            "각 파일에서 당년도예산이 가장 높은 항목 알려줘",
-            "전체 파일에서 예산잔액이 가장 큰 항목 5개 보여줘",
-            "파일별 집행률 비교해줘",
-        ]:
+        multi_examples = ["이 파일들 통합해줘"]
+        combined_profile = st.session_state.get("combined_profile") or {}
+        multi_examples.extend(combined_profile.get("domain_multi_example_queries", [])[:5])
+        if not combined_profile.get("domain_multi_example_queries"):
+            multi_examples.extend([
+                "파일별 금액 합계 비교해줘",
+                "항목을 파일별로 비교해줘",
+            ])
+        for ex in multi_examples:
             st.markdown(f"- {ex}")
 
 
@@ -202,8 +202,8 @@ def _handle_uploads(uploaded_files: list | None) -> None:
         f = uploaded_files[0]
         st.session_state.file_path = _save_upload(f)
         st.session_state.uploaded_name = f.name
-        df = load_excel(st.session_state.file_path)
-        st.session_state.profile = profile_dataframe(df)
+        df, domain = load_excel_with_domain(st.session_state.file_path)
+        st.session_state.profile = profile_dataframe(df, domain=domain)
         st.session_state.preview_df = df.head(10)
         return
 

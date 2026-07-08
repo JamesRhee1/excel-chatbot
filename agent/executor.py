@@ -11,7 +11,7 @@ from agent.response_formatter import format_user_response
 from agent.router import route_query
 from agent.tools import apply_operation
 from core.profiler import profile_dataframe
-from core.reader import load_excel
+from core.reader import load_excel_with_domain
 from core.writer import save_excel
 from llm.client import OllamaConnectionError, OllamaModelNotFoundError
 from llm.intent import IntentParseError, parse_intent
@@ -27,8 +27,8 @@ def run(
 ) -> dict:
     profile: dict = {}
     try:
-        df = load_excel(file_path, sheet_name=sheet_name)
-        profile = profile_dataframe(df)
+        df, domain = load_excel_with_domain(file_path, sheet_name=sheet_name)
+        profile = profile_dataframe(df, domain=domain)
 
         intent = route_query(user_message, profile)
         if intent is None:
@@ -201,10 +201,12 @@ def _missing_column_message(exc: KeyError, profile: dict) -> str:
 def _format_value_error(exc: ValueError, profile: dict) -> str:
     message = str(exc)
     if "찾지 못했습니다" in message or "찾을 수 없" in message:
-        return (
-            f"{message}\n\n"
-            "다시 질문해보세요. 예: '당년도예산이 가장 높은 행', '인쇄비가 얼마야?'"
-        )
+        examples = profile.get("domain_example_queries") or [
+            "가장 높은 행 찾아줘",
+            "항목이 얼마야?",
+        ]
+        example_text = ", ".join(f"'{q}'" for q in examples[:2])
+        return f"{message}\n\n다시 질문해보세요. 예: {example_text}"
     if "지원하지 않는 operation type" in message:
         return message
     return f"작업 실행 중 오류가 발생했습니다: {message}"

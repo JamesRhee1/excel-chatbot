@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from domains.registry import enrich_profile, infer_domain_from_columns
+
 _AMOUNT_KEYWORDS = (
     "예산", "금액", "비용", "집행", "잔액", "누계", "합계", "매출", "수량", "단가", "원가", "가집행",
 )
@@ -21,7 +23,7 @@ def _is_mostly_numeric(series: pd.Series) -> bool:
     return numeric.notna().sum() >= max(1, len(series.dropna()) * 0.5)
 
 
-def profile_dataframe(df: pd.DataFrame) -> dict:
+def profile_dataframe(df: pd.DataFrame, domain: str | None = None) -> dict:
     """Build a structural profile of a DataFrame for intent planning and routing."""
     column_names = [str(c) for c in df.columns.tolist()]
     unnamed_columns = [c for c in column_names if c.startswith("Unnamed")]
@@ -57,7 +59,7 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
         if any(kw in col for kw in _NAME_KEYWORDS):
             likely_name_columns.append(col)
 
-    return {
+    profile = {
         "rows": len(df),
         "columns": len(df.columns),
         "column_names": column_names,
@@ -70,5 +72,6 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
         "likely_amount_columns": likely_amount_columns,
         "likely_category_columns": likely_category_columns,
         "likely_name_columns": likely_name_columns,
-        "is_budget_table": "행구분" in column_names and "비목분류" in column_names,
     }
+    resolved_domain = domain or infer_domain_from_columns(column_names)
+    return enrich_profile(profile, resolved_domain)

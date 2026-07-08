@@ -6,7 +6,7 @@ import re
 
 import pandas as pd
 
-from core.budget_table_normalizer import is_budget_comparison_sheet, normalize_budget_sheet
+from domains.registry import infer_domain_from_columns, match_pack
 
 
 def normalize_column_names(df: pd.DataFrame) -> pd.DataFrame:
@@ -42,22 +42,18 @@ def coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def load_excel(path: str, sheet_name: str | int = 0) -> pd.DataFrame:
-    """Load an Excel sheet; normalize 예실대비표 or apply generic cleanup."""
+def load_excel_with_domain(path: str, sheet_name: str | int = 0) -> tuple[pd.DataFrame, str]:
+    """Load an Excel sheet via domain pack detection and normalization."""
     raw = pd.read_excel(path, sheet_name=sheet_name, header=None)
+    pack = match_pack(raw)
+    df = pack.normalize_raw(raw, path=path, sheet_name=sheet_name)
+    domain = infer_domain_from_columns([str(c) for c in df.columns.tolist()])
+    return df, domain
 
-    if is_budget_comparison_sheet(raw):
-        return normalize_budget_sheet(raw)
 
-    # Generic table: use first row as header if it looks like headers
-    if _looks_like_header_row(raw.iloc[0]):
-        df = pd.read_excel(path, sheet_name=sheet_name, header=0)
-    else:
-        df = raw.copy()
-        df.columns = [f"col_{i}" for i in range(df.shape[1])]
-
-    df = normalize_column_names(df)
-    df = coerce_numeric_columns(df)
+def load_excel(path: str, sheet_name: str | int = 0) -> pd.DataFrame:
+    """Load an Excel sheet; normalize via domain registry."""
+    df, _ = load_excel_with_domain(path, sheet_name=sheet_name)
     return df
 
 
@@ -77,6 +73,8 @@ def list_sheets(path: str) -> list[str]:
 
 def summarize(df: pd.DataFrame) -> dict:
     """Summarize a DataFrame's shape, columns, dtypes, missing values, and numeric stats."""
+    from domains.registry import enrich_profile, infer_domain_from_columns
+
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     numeric_stats: dict[str, dict] = {}
     for col in numeric_cols:
@@ -87,12 +85,13 @@ def summarize(df: pd.DataFrame) -> dict:
             "std": float(df[col].std()) if not df[col].isna().all() else None,
         }
 
-    return {
+    base = {
         "rows": len(df),
         "columns": len(df.columns),
         "column_names": df.columns.tolist(),
         "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
         "missing_counts": {col: int(df[col].isna().sum()) for col in df.columns},
         "numeric_stats": numeric_stats,
-        "is_budget_table": "행구분" in df.columns and "비목분류" in df.columns,
     }
+    domain = infer_domain_from_columns(df.columns.tolist())
+    return enrich_profile(base, domain)

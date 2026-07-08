@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-from core.column_resolver import _SYNONYMS
 
 _HELP_KEYWORDS = (
     "할 수 있는", "할수있는", "할 수 있", "기능", "도움말", "뭘 할", "무엇을 할", "예시",
@@ -28,6 +27,24 @@ _FILTER_NUM_PATTERN = re.compile(
 )
 _FILTER_POSITIVE_PATTERN = re.compile(r"(.+?)(?:이|가)\s*0\s*보다\s*큰")
 _REMAINING_BALANCE = re.compile(r"(예산잔액|잔액).*(남|있는)|남은.*(예산|잔액)")
+
+
+def _synonyms(profile: dict) -> dict[str, str]:
+    return profile.get("domain_synonyms") or {}
+
+
+def _uses_row_types(profile: dict) -> bool:
+    cfg = profile.get("summary_row_config") or {}
+    return bool(cfg.get("row_type_column") and cfg.get("detail_row_type"))
+
+
+def _total_row_types(profile: dict) -> list[str]:
+    cfg = profile.get("summary_row_config") or {}
+    return list(cfg.get("total_row_types") or ["합계"])
+
+
+def _balance_column(profile: dict) -> str | None:
+    return profile.get("domain_balance_column_fallback")
 
 
 def route_query(user_query: str, profile: dict) -> dict | None:
@@ -129,17 +146,14 @@ def _try_value_answer(msg: str) -> dict | None:
 def _try_total_row(msg: str, profile: dict) -> dict | None:
     if not any(h in msg for h in _TOTAL_HINTS):
         return None
-    if profile.get("is_budget_table"):
-        return _intent("mixed", [{"type": "filter_row_type", "row_types": ["합계"]}])
+    if _uses_row_types(profile):
+        return _intent("mixed", [{"type": "filter_row_type", "row_types": _total_row_types(profile)}])
     return _intent("mixed", [{"type": "lookup", "query": "합계"}])
 
 
 def _try_filter(msg: str, profile: dict) -> dict | None:
     if _REMAINING_BALANCE.search(msg):
-        if profile.get("is_budget_table"):
-            col = "예산잔액_당해잔액"
-        else:
-            col = _extract_column_hint(msg, profile) or "예산잔액"
+        col = _balance_column(profile) or _extract_column_hint(msg, profile) or "잔액"
         return _intent("dataframe", [{"type": "filter", "column": col, "op": ">", "value": 0}])
 
     match = _FILTER_POSITIVE_PATTERN.search(msg)
@@ -235,11 +249,12 @@ def _try_aggregate(msg: str, profile: dict) -> dict | None:
 def _extract_column_hint(msg: str, profile: dict) -> str | None:
     column_names = profile.get("column_names", [])
     unnamed = set(profile.get("unnamed_columns", []))
+    synonyms = _synonyms(profile)
 
     for col in column_names:
         if col not in unnamed and col in msg:
             return col
-    for expr in _SYNONYMS:
+    for expr in synonyms:
         if expr in msg:
             return expr
     for col in profile.get("likely_amount_columns", []) + profile.get("likely_category_columns", []):
@@ -261,7 +276,7 @@ def _extract_column_hint(msg: str, profile: dict) -> str | None:
         for col in column_names:
             if col not in unnamed and (token in col or col in token):
                 return col
-        if token in _SYNONYMS:
+        if token in synonyms:
             return token
     return None
 

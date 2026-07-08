@@ -12,33 +12,7 @@ from llm.intent import UNKNOWN_MESSAGE
 
 _FULL_DETAIL_KEYWORDS = ("자세히", "전체 컬럼", "모든 컬럼", "전체 보여", "모든 컬럼")
 
-VALUE_PRIMARY_COLS = ("당년도예산", "당년도집행", "예산잔액_당해잔액", "예산잔액_합계")
-VALUE_SECONDARY_COLS = ("계획예산", "실행예산_당해예산", "실행예산_합계", "집행계_합계")
-
-DEFAULT_DISPLAY_COLS = (
-    "비목분류",
-    "비용명",
-    "당년도예산",
-    "당년도집행",
-    "예산잔액_당해잔액",
-    "예산잔액_합계",
-)
-
-TOP_N_EXTRA_COLS = ("당년도집행", "예산잔액_당해잔액", "예산잔액_합계")
-
-_COLUMN_LABELS = {
-    "당년도예산": "당년도예산",
-    "당년도집행": "당년도집행",
-    "예산잔액_당해잔액": "예산잔액",
-    "예산잔액_합계": "예산잔액(합계)",
-    "계획예산": "계획예산",
-    "실행예산_당해예산": "실행예산",
-    "실행예산_합계": "실행예산(합계)",
-    "집행계_합계": "집행계",
-}
-
 _INTERNAL_LOG_MARKERS = (
-    "행구분이",
     "분석 대상으로 선정",
     "합계/소계",
     "상세 항목",
@@ -48,12 +22,55 @@ _INTERNAL_LOG_MARKERS = (
 )
 
 
+def _profile_cols(profile: dict, key: str, *fallback_keys: str) -> tuple[str, ...]:
+    values = profile.get(key)
+    if values:
+        return tuple(values)
+    for fallback in fallback_keys:
+        alt = profile.get(fallback)
+        if alt:
+            return tuple(alt)
+    return ()
+
+
+def _value_primary_cols(profile: dict) -> tuple[str, ...]:
+    return _profile_cols(profile, "domain_value_primary_cols", "likely_amount_columns")
+
+
+def _value_secondary_cols(profile: dict) -> tuple[str, ...]:
+    return _profile_cols(profile, "domain_value_secondary_cols")
+
+
+def _default_display_cols(profile: dict) -> tuple[str, ...]:
+    cols = _profile_cols(profile, "domain_default_display_cols")
+    if cols:
+        return cols
+    merged: list[str] = []
+    for key in ("likely_category_columns", "likely_name_columns", "likely_amount_columns"):
+        merged.extend(profile.get(key, []))
+    return tuple(dict.fromkeys(merged))
+
+
+def _top_n_extra_cols(profile: dict) -> tuple[str, ...]:
+    return _profile_cols(profile, "domain_top_n_extra_cols")
+
+
+def _column_label(col: str, profile: dict) -> str:
+    labels = profile.get("domain_column_labels") or {}
+    return labels.get(col, col)
+
+
+def _internal_log_markers(profile: dict | None = None) -> tuple[str, ...]:
+    markers = list(_INTERNAL_LOG_MARKERS)
+    if profile:
+        row_col = (profile.get("summary_row_config") or {}).get("row_type_column")
+        if row_col:
+            markers.append(f"{row_col}이")
+    return tuple(markers)
+
+
 def wants_full_detail(user_query: str) -> bool:
     return any(kw in user_query for kw in _FULL_DETAIL_KEYWORDS)
-
-
-def _column_label(col: str) -> str:
-    return _COLUMN_LABELS.get(col, col)
 
 
 def _row_label(row: pd.Series, profile: dict) -> str:
@@ -90,9 +107,11 @@ def select_display_df(
     primary_op = _primary_operation(operations)
 
     if primary_op == "value_answer":
-        cols = _pick_existing_columns(raw_df, VALUE_PRIMARY_COLS + VALUE_SECONDARY_COLS)
+        primary_cols = _value_primary_cols(profile)
+        secondary_cols = _value_secondary_cols(profile)
+        cols = _pick_existing_columns(raw_df, primary_cols + secondary_cols)
         if not cols:
-            cols = _pick_existing_columns(raw_df, DEFAULT_DISPLAY_COLS)
+            cols = _pick_existing_columns(raw_df, _default_display_cols(profile))
         return raw_df[cols].head(1).copy() if cols else raw_df.head(1).copy()
 
     if primary_op == "top_n":
@@ -100,20 +119,21 @@ def select_display_df(
             next((op.get("column", "") for op in operations if op.get("type") == "top_n"), ""),
             "",
         )
+        name_cols = tuple(profile.get("domain_name_columns") or profile.get("likely_name_columns", [])[:2])
         cols = _pick_existing_columns(
             raw_df,
-            ("비목분류", "비용명", criterion, *TOP_N_EXTRA_COLS),
+            (*name_cols, criterion, *_top_n_extra_cols(profile)),
         )
         cols = list(dict.fromkeys(c for c in cols if c))
         return raw_df[cols].copy() if cols else raw_df.copy()
 
     if primary_op in ("aggregate", "sort", "filter", "lookup"):
-        cols = _pick_existing_columns(raw_df, DEFAULT_DISPLAY_COLS)
+        cols = _pick_existing_columns(raw_df, _default_display_cols(profile))
         extra = [c for c in raw_df.columns if c not in cols][:4]
         cols = list(dict.fromkeys(cols + extra))
         return raw_df[cols].copy() if cols else raw_df.copy()
 
-    cols = _pick_existing_columns(raw_df, DEFAULT_DISPLAY_COLS)
+    cols = _pick_existing_columns(raw_df, _default_display_cols(profile))
     return raw_df[cols].copy() if cols else raw_df.copy()
 
 
@@ -125,7 +145,14 @@ def _primary_operation(operations: list[dict]) -> str | None:
     return operations[-1].get("type") if operations else None
 
 
-def _format_amount_bullets(row: dict, columns: tuple[str, ...], *, skip_zero_secondary: bool = False) -> list[str]:
+def _format_amount_bullets(
+    row: dict,
+    columns: tuple[str, ...],
+    profile: dict,
+    *,
+    skip_zero_secondary: bool = False,
+) -> list[str]:
+    secondary_cols = set(_value_secondary_cols(profile))
     bullets: list[str] = []
     for col in columns:
         if col not in row:
@@ -133,33 +160,33 @@ def _format_amount_bullets(row: dict, columns: tuple[str, ...], *, skip_zero_sec
         val = row[col]
         if val is None or (isinstance(val, float) and pd.isna(val)):
             continue
-        if skip_zero_secondary and col in VALUE_SECONDARY_COLS and val == 0:
+        if skip_zero_secondary and col in secondary_cols and val == 0:
             continue
-        if col in VALUE_SECONDARY_COLS and val == 0:
+        if col in secondary_cols and val == 0:
             continue
-        bullets.append(f"- {_column_label(col)}: {_format_amount(val)}")
+        bullets.append(f"- {_column_label(col, profile)}: {_format_amount(val)}")
     return bullets
 
 
-def _format_value_answer_message(metadata: dict, user_query: str) -> str:
+def _format_value_answer_message(metadata: dict, user_query: str, profile: dict) -> str:
     row = metadata.get("row") or {}
     label = metadata.get("label") or metadata.get("row_query", "해당 항목")
     lines = [f"**{label}** 항목을 찾았습니다.", ""]
 
-    primary = _format_amount_bullets(row, VALUE_PRIMARY_COLS)
+    primary = _format_amount_bullets(row, _value_primary_cols(profile), profile)
     if primary:
         lines.extend(primary)
     else:
         lines.append("- 표시할 금액 정보가 없습니다.")
 
     secondary_parts = []
-    for col in VALUE_SECONDARY_COLS:
+    for col in _value_secondary_cols(profile):
         if col not in row:
             continue
         val = row[col]
         if val is None or (isinstance(val, float) and pd.isna(val)) or val == 0:
             continue
-        secondary_parts.append(f"{_column_label(col)}은 {_format_amount(val)}")
+        secondary_parts.append(f"{_column_label(col, profile)}은 {_format_amount(val)}")
 
     if secondary_parts:
         lines.extend(["", f"참고로 {', '.join(secondary_parts)}입니다."])
@@ -199,14 +226,17 @@ def _format_top_n_message(
 
 
 def _format_describe_message(df: pd.DataFrame, profile: dict) -> str:
-    if profile.get("is_budget_table"):
+    if profile.get("domain_describe_label"):
+        name_cols = profile.get("domain_name_columns") or profile.get("likely_name_columns", [])
+        amount_cols = profile.get("likely_amount_columns", [])
+        key_cols = ", ".join(name_cols[:3]) if name_cols else "주요 식별 컬럼"
+        amount_text = ", ".join(amount_cols[:5]) if amount_cols else "주요 금액 컬럼"
+        examples = profile.get("domain_example_queries", [])[:3]
+        example_lines = "\n".join(f'- "{q}"' for q in examples)
         return (
-            f"이 파일은 **예실대비표** 형식의 예산·집행 데이터입니다 ({profile['rows']}행).\n\n"
-            "**주요 컬럼:** 비목분류, 비용명, 당년도예산, 당년도집행, 예산잔액\n\n"
-            "**질문 예시**\n"
-            '- "당해예산 중 가장 높은 행 찾아줘"\n'
-            '- "인쇄비가 얼마지"\n'
-            '- "비목분류별 당년도예산 합계 보여줘"'
+            f"이 파일은 **{profile['domain_describe_label']}** 형식의 예산·집행 데이터입니다 ({profile['rows']}행).\n\n"
+            f"**주요 컬럼:** {key_cols}, {amount_text}\n\n"
+            f"**질문 예시**\n{example_lines}"
         )
 
     info = describe_dataset_info(df, profile)
@@ -252,7 +282,7 @@ def format_user_response(
     message = ""
 
     if primary == "value_answer" and value_metadata:
-        message = _format_value_answer_message(value_metadata, user_query)
+        message = _format_value_answer_message(value_metadata, user_query, profile)
     elif primary == "top_n" and raw_df is not None and not raw_df.empty:
         top_op = next(op for op in operations if op.get("type") == "top_n")
         message = _format_top_n_message(top_op, raw_df, profile, resolved)
@@ -284,7 +314,9 @@ def format_user_response(
         if row_types == ["합계"]:
             message = "전체 **합계** 행입니다."
         elif row_types == ["소계"]:
-            message = "비목분류별 **소계** 행입니다."
+            category_cols = profile.get("likely_category_columns") or []
+            cat_label = category_cols[0] if category_cols else "분류"
+            message = f"{cat_label}별 **소계** 행입니다."
         else:
             message = f"요청하신 {len(raw_df)}개 항목입니다."
 
@@ -309,5 +341,5 @@ def format_user_response(
     return message, display_df, raw_df
 
 
-def is_internal_log(text: str) -> bool:
-    return any(marker in text for marker in _INTERNAL_LOG_MARKERS)
+def is_internal_log(text: str, profile: dict | None = None) -> bool:
+    return any(marker in text for marker in _internal_log_markers(profile))

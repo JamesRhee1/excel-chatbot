@@ -80,10 +80,13 @@ def _apply_exclude_summary(df: pd.DataFrame, op: dict, profile: dict) -> ApplyRe
 
 
 def _apply_filter_row_type(df: pd.DataFrame, op: dict, profile: dict) -> ApplyResult:
-    row_types = op.get("row_types") or ["상세"]
-    filtered = filter_row_types(df, row_types)
+    row_config = profile.get("summary_row_config") or {}
+    default_type = row_config.get("detail_row_type") or "상세"
+    row_types = op.get("row_types") or [default_type]
+    filtered = filter_row_types(df, row_types, profile=profile)
     label = ", ".join(row_types)
-    debug_log = f"행구분이 '{label}'인 {len(filtered)}개 행을 분석 대상으로 선정했습니다."
+    row_col = row_config.get("row_type_column") or "행 유형"
+    debug_log = f"{row_col}이 '{label}'인 {len(filtered)}개 행을 분석 대상으로 선정했습니다."
     return _result_df(filtered, message=None) | {"debug_log": debug_log}
 
 

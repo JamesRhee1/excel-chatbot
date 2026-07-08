@@ -8,6 +8,10 @@ from core.operations import describe_dataset_info
 
 
 def analysis_examples(profile: dict) -> list[str]:
+    domain_examples = profile.get("domain_example_queries") or []
+    if domain_examples:
+        return [f'"{q}"' if not q.startswith('"') else q for q in domain_examples]
+
     name_col = profile.get("likely_name_columns", ["항목"])
     amount_col = profile.get("likely_amount_columns", ["금액"])
     cat_col = profile.get("likely_category_columns", [])
@@ -23,6 +27,7 @@ def analysis_examples(profile: dict) -> list[str]:
 
 def build_help_message(profile: dict | None = None) -> str:
     """Build profile-aware help message with question examples."""
+    profile = profile or {}
     lines = [
         "업로드된 엑셀 파일을 기준으로 아래와 같은 질문을 할 수 있습니다.",
         "",
@@ -32,22 +37,22 @@ def build_help_message(profile: dict | None = None) -> str:
         "",
         "**항목/금액 조회**",
     ]
-    name_col = (profile or {}).get("likely_name_columns", ["비용명"])
-    amount_cols = (profile or {}).get("likely_amount_columns", ["당년도예산"])
-    name_example = name_col[0] if name_col else "항목명"
-    amount_example = amount_cols[0] if amount_cols else "당년도예산"
-    samples = (profile or {}).get("sample_values_by_column", {}).get(name_example, [])
-    item_example = samples[0] if samples else "인쇄비"
+    name_col = profile.get("likely_name_columns") or [profile.get("domain_help_item_fallback", "항목")]
+    amount_cols = profile.get("likely_amount_columns") or [profile.get("domain_help_amount_fallback", "금액")]
+    name_example = name_col[0] if name_col else profile.get("domain_help_item_fallback", "항목")
+    amount_example = amount_cols[0] if amount_cols else profile.get("domain_help_amount_fallback", "금액")
+    samples = profile.get("sample_values_by_column", {}).get(name_example, [])
+    item_example = samples[0] if samples else name_example
 
     lines.extend(
         [
             f'- "{item_example}가 얼마야?"',
             f'- "{amount_example}이 가장 높은 행 찾아줘"',
-            '- "예산잔액이 남은 항목 보여줘"',
+            '- "잔액이 남은 항목 보여줘"',
         ]
     )
 
-    cat_col = (profile or {}).get("likely_category_columns", [])
+    cat_col = profile.get("likely_category_columns", [])
     if cat_col:
         lines.extend(
             [
@@ -59,14 +64,10 @@ def build_help_message(profile: dict | None = None) -> str:
             ]
         )
 
-    lines.extend(
-        [
-            "",
-            "**팁**",
-            '- 정확한 컬럼명을 몰라도 됩니다. "당해예산" → "당년도예산"처럼 자동 해석합니다.',
-            "- 모든 숫자는 pandas로 실제 계산한 결과입니다.",
-        ]
-    )
+    lines.extend(["", "**팁**"])
+    if profile.get("domain_synonym_tip"):
+        lines.append(f"- {profile['domain_synonym_tip']}")
+    lines.append("- 모든 숫자는 pandas로 실제 계산한 결과입니다.")
     return "\n".join(lines)
 
 
@@ -75,19 +76,20 @@ HELP_MESSAGE = build_help_message()
 
 def describe_dataset(df: pd.DataFrame, profile: dict) -> str:
     """Build a natural-language summary of the dataset."""
-    if profile.get("is_budget_table"):
+    if profile.get("domain_describe_label"):
         amount_cols = profile.get("likely_amount_columns", [])
+        name_cols = profile.get("domain_name_columns") or profile.get("likely_name_columns", [])
+        label = profile["domain_describe_label"]
+        key_cols = ", ".join(f"`{c}`" for c in name_cols[:3]) if name_cols else "주요 식별 컬럼"
         return (
-            "이 파일은 **예실대비표** 형식의 예산·집행 현황 데이터입니다.\n\n"
+            f"이 파일은 **{label}** 형식의 예산·집행 현황 데이터입니다.\n\n"
             f"- **{profile['rows']}행**, **{profile['columns']}열**\n"
-            "- 주요 기준 컬럼: `비목분류`, `비목코드`, `비용명`\n"
+            f"- 주요 기준 컬럼: {key_cols}\n"
             f"- 주요 금액 컬럼: {', '.join(f'`{c}`' for c in amount_cols[:8])}\n"
-            "- 기본 분석은 **상세 항목(행구분=상세)** 만 대상으로 합니다.\n"
+            "- 기본 분석은 **상세 항목**만 대상으로 합니다.\n"
             "- '전체 합계 알려줘'처럼 질문하면 합계 행을 사용합니다.\n\n"
             "**질문 예시**\n"
-            '- "당해예산 중 가장 높은 행 찾아줘"\n'
-            '- "인쇄비가 얼마지"\n'
-            '- "비목분류별 당년도예산 합계 보여줘"'
+            + "\n".join(f'- "{q}"' for q in profile.get("domain_example_queries", [])[:3])
         )
 
     info = describe_dataset_info(df, profile)

@@ -7,33 +7,9 @@ import re
 
 import pandas as pd
 
-_SYNONYMS: dict[str, str] = {
-    "당해예산": "당년도예산",
-    "올해예산": "당년도예산",
-    "금년예산": "당년도예산",
-    "올해 예산": "당년도예산",
-    "당년예산": "당년도예산",
-    "당해집행": "당년도집행",
-    "올해집행": "당년도집행",
-    "금년집행": "당년도집행",
-    "작년집행": "전년도집행",
-    "전년집행": "전년도집행",
-    "잔액": "예산잔액_당해잔액",
-    "남은예산": "예산잔액_당해잔액",
-    "남은 금액": "예산잔액_당해잔액",
-    "예산잔액": "예산잔액_합계",
-    "비용": "비용명",
-    "항목": "비용명",
-    "항목명": "비용명",
-    "무엇": "비용명",
-    "이름": "비용명",
-    "분류": "비목분류",
-    "구분": "비목분류",
-    "총액": "집행계",
-    "합계": "집행계",
-    "계획": "계획예산",
-    "실행": "실행예산",
-}
+
+def _synonyms(profile: dict) -> dict[str, str]:
+    return profile.get("domain_synonyms") or {}
 
 
 def _normalize(name: str) -> str:
@@ -71,7 +47,7 @@ def resolve_column(user_expression: str, df: pd.DataFrame, profile: dict) -> str
         if _normalize(col) == user_norm:
             return col
 
-    canonical = _SYNONYMS.get(user_col) or _SYNONYMS.get(user_norm)
+    canonical = _synonyms(profile).get(user_col) or _synonyms(profile).get(user_norm)
     if canonical:
         if canonical in columns:
             return canonical
@@ -84,7 +60,7 @@ def resolve_column(user_expression: str, df: pd.DataFrame, profile: dict) -> str
         if user_norm in col_norm or col_norm in user_norm:
             return col
 
-    for expr, target in _SYNONYMS.items():
+    for expr, target in _synonyms(profile).items():
         if expr in user_col or user_col in expr:
             if target in columns:
                 return target
