@@ -76,6 +76,20 @@ def test_profile_detects_column_roles(budget_profile):
     assert "비용명" in budget_profile["likely_name_columns"]
 
 
+def test_profile_excludes_id_like_numeric_from_likely_amount():
+    df = pd.DataFrame(
+        {
+            "비목코드": [101, 102, 103],
+            "금액": [1000, 2500, 1800],
+            "연도": [2024, 2024, 2025],
+        }
+    )
+    profile = profile_dataframe(df)
+    assert "금액" in profile["likely_amount_columns"]
+    assert "비목코드" not in profile["likely_amount_columns"]
+    assert "연도" not in profile["likely_amount_columns"]
+
+
 def test_suggest_columns_on_failure(budget_df, budget_profile):
     suggestions = suggest_columns("당해예산", budget_df, budget_profile)
     assert "당년도예산" in suggestions

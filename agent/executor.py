@@ -14,7 +14,7 @@ from agent.tools import apply_operation
 from core.dataset_builder import build_combined_dataset
 from core.table_operations import build_multi_file_summary
 from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, validate_pipeline
-from core.profiler import profile_dataframe
+from core.profiler import _ID_LIKE_KEYWORDS, profile_dataframe
 from core.reader import load_excel_with_domain
 from core.sandbox_runner import CODEGEN_WARNING, SandboxError, is_codegen_enabled, run_sandbox
 from core.workspace import LAST_RESULT_TABLE, Workspace
@@ -57,6 +57,99 @@ def _apply_context_source(intent: dict, user_message: str) -> dict:
         updated_ops.append(new_op)
     intent["operations"] = updated_ops
     return intent
+
+
+def _is_id_like_column(name: str) -> bool:
+    lowered = str(name).strip().lower()
+    return any(keyword in lowered for keyword in _ID_LIKE_KEYWORDS)
+
+
+def _contains_column_hint(user_message: str, column: str) -> bool:
+    msg = user_message.replace(" ", "")
+    col = str(column).replace(" ", "")
+    return bool(col) and col in msg
+
+
+def _pick_auto_rank_column(df: pd.DataFrame, profile: dict, workspace: Workspace) -> str | None:
+    last_ranked = workspace.get_state("last_ranked_column")
+    if isinstance(last_ranked, str) and last_ranked in df.columns:
+        return last_ranked
+
+    likely_amount = profile.get("likely_amount_columns") or []
+    if likely_amount:
+        return likely_amount[0]
+
+    for col in profile.get("numeric_columns") or []:
+        if col in df.columns and not _is_id_like_column(col):
+            return str(col)
+    return None
+
+
+def _resolve_ranking_column(
+    operation: dict,
+    *,
+    user_message: str,
+    current_df: pd.DataFrame,
+    profile: dict,
+    workspace: Workspace,
+) -> dict:
+    op = dict(operation)
+    raw_column = op.get("column")
+    needs_auto = bool(op.get("_auto_selected_column"))
+    if not needs_auto:
+        needs_auto = not isinstance(raw_column, str) or not raw_column.strip()
+    if not needs_auto and isinstance(raw_column, str):
+        needs_auto = _is_id_like_column(raw_column) and not _contains_column_hint(user_message, raw_column)
+
+    if not needs_auto:
+        return op
+
+    selected = _pick_auto_rank_column(current_df, profile, workspace)
+    if not selected:
+        raise ValueError("정렬 기준 컬럼을 자동으로 선택할 수 없습니다. 기준 컬럼을 지정해 주세요.")
+    op["column"] = selected
+    op["_auto_selected_column"] = True
+    return op
+
+
+def _resolve_llm_profile(
+    *,
+    user_message: str,
+    workspace: Workspace,
+    default_table: str,
+    fallback_profile: dict,
+) -> tuple[str, dict]:
+    source_name = LAST_RESULT_TABLE if any(hint in user_message for hint in _CONTEXT_SOURCE_HINTS) else default_table
+    source_table = workspace.get(source_name) or workspace.get(default_table)
+    if source_table is None or source_table.df is None:
+        return default_table, fallback_profile
+    refreshed = profile_dataframe(source_table.df, domain=source_table.domain)
+    return source_table.name, refreshed
+
+
+def _prepare_operations_for_execution(
+    operations: list[dict],
+    *,
+    user_message: str,
+    workspace: Workspace,
+    default_table: str,
+) -> list[dict]:
+    prepared: list[dict] = []
+    for operation in operations:
+        op = dict(operation)
+        if op.get("type") in {"top_n", "sort"}:
+            source_name = op.get("source") or default_table
+            source_table = workspace.get(source_name)
+            if source_table is not None:
+                op = _resolve_ranking_column(
+                    op,
+                    user_message=user_message,
+                    current_df=source_table.df,
+                    profile=source_table.profile,
+                    workspace=workspace,
+                )
+        prepared.append(op)
+    return prepared
 
 
 def _emit_run_trace(
@@ -218,10 +311,23 @@ def run(
             if approved_codegen_code:
                 pass
             elif not intent:
-                intent = parse_intent(user_message, profile, model=model)
+                _, llm_profile = _resolve_llm_profile(
+                    user_message=user_message,
+                    workspace=ws,
+                    default_table=default_table,
+                    fallback_profile=profile,
+                )
+                profile = llm_profile
+                intent = parse_intent(user_message, llm_profile, model=model)
             if not approved_codegen_code:
                 intent = prepend_exclude_summary(intent, user_message, profile)
                 intent = _apply_context_source(intent, user_message)
+                intent["operations"] = _prepare_operations_for_execution(
+                    intent.get("operations") or [],
+                    user_message=user_message,
+                    workspace=ws,
+                    default_table=default_table,
+                )
 
             table = ws.get(default_table)
             if table and table.df is not None:
@@ -306,6 +412,7 @@ def run(
                     execution = _apply_operations_workspace(
                         ws,
                         intent["operations"],
+                        user_message=user_message,
                         default_table=default_table,
                         context=context,
                     )
@@ -314,6 +421,9 @@ def run(
                     verification_summaries = [
                         report["summary"] for report in execution.get("verification", [])
                     ]
+                    ranked_column = execution.get("last_ranked_column")
+                    if isinstance(ranked_column, str) and ranked_column:
+                        ws.set_state("last_ranked_column", ranked_column)
                     route_path = "llm_fallback_clarify"
                     message, display_df, raw_df = format_user_response(
                         user_message,
@@ -345,6 +455,7 @@ def run(
                 execution = _apply_operations_workspace(
                     ws,
                     intent["operations"],
+                    user_message=user_message,
                     default_table=default_table,
                     context=context,
                 )
@@ -368,6 +479,9 @@ def run(
                         domain=result_domain,
                         profile=profile_dataframe(execution["df"], domain=result_domain),
                     )
+                ranked_column = execution.get("last_ranked_column")
+                if isinstance(ranked_column, str) and ranked_column:
+                    ws.set_state("last_ranked_column", ranked_column)
 
                 message, display_df, raw_df = format_user_response(
                     user_message,
@@ -466,6 +580,7 @@ def _apply_operations_workspace(
     workspace: Workspace,
     operations: list[dict],
     *,
+    user_message: str,
     default_table: str,
     context: dict,
 ) -> dict:
@@ -479,6 +594,7 @@ def _apply_operations_workspace(
     prev_output: str | None = None
     verification: list[dict] = []
     per_op_ms: list[float] = []
+    last_ranked_column: str | None = None
 
     for index, operation in enumerate(operations):
         spec = OPERATION_SPEC_BY_TYPE[operation["type"]]
@@ -498,13 +614,23 @@ def _apply_operations_workspace(
             current_df = table.df if table else pd.DataFrame()
             current_profile = table.profile if table else {}
 
+        operation_to_apply = dict(operation)
+        if operation_to_apply.get("type") in {"top_n", "sort"}:
+            operation_to_apply = _resolve_ranking_column(
+                operation_to_apply,
+                user_message=user_message,
+                current_df=current_df,
+                profile=current_profile,
+                workspace=workspace,
+            )
+
         input_df = current_df.copy()
 
         op_started = time.perf_counter()
         try:
             outcome = apply_operation(
                 current_df,
-                operation,
+                operation_to_apply,
                 profile=current_profile,
                 context=context,
             )
@@ -515,14 +641,14 @@ def _apply_operations_workspace(
         resolved_columns.update(outcome.get("resolved_columns") or {})
         if outcome.get("value_metadata"):
             value_metadata = outcome["value_metadata"]
-        if outcome.get("stats") and operation.get("type") == "multi_summary":
+        if outcome.get("stats") and operation_to_apply.get("type") == "multi_summary":
             context["file_summary"] = outcome["stats"]
         if outcome.get("df") is not None:
-            verify_args = dict(operation)
-            if operation.get("type") == "exclude_summary":
+            verify_args = dict(operation_to_apply)
+            if operation_to_apply.get("type") == "exclude_summary":
                 verify_args["_profile"] = current_profile
             report = verify_operation(
-                operation["type"],
+                operation_to_apply["type"],
                 input_df,
                 outcome["df"],
                 verify_args,
@@ -530,20 +656,22 @@ def _apply_operations_workspace(
             verification.append(report.to_dict())
             current_df = outcome["df"]
             produced_dataframe = True
-            save_as = operation.get("save_as")
+            save_as = operation_to_apply.get("save_as")
             if save_as:
                 saved_name = workspace.add_table(
                     save_as,
                     current_df,
-                    source=f"op:{operation['type']}",
+                    source=f"op:{operation_to_apply['type']}",
                     profile=current_profile,
                 )
                 debug_logs.append(f"결과를 '{saved_name}' 테이블로 저장했습니다.")
         if outcome.get("debug_log"):
             debug_logs.append(outcome["debug_log"])
-        if outcome.get("message") and operation.get("type") == "clarify":
+        if outcome.get("message") and operation_to_apply.get("type") == "clarify":
             debug_logs.append(outcome["message"])
-        applied.append(operation)
+        if operation_to_apply.get("type") in {"top_n", "sort"}:
+            last_ranked_column = str(operation_to_apply.get("column", "")).strip() or last_ranked_column
+        applied.append(operation_to_apply)
         prev_output = spec.output_type
 
     clarify_only = operations and all(op.get("type") == "clarify" for op in operations)
@@ -557,6 +685,7 @@ def _apply_operations_workspace(
         "applied": applied,
         "verification": verification,
         "per_op_ms": per_op_ms,
+        "last_ranked_column": last_ranked_column,
     }
 
 

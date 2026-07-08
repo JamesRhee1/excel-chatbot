@@ -11,6 +11,7 @@ _AMOUNT_KEYWORDS = (
 )
 _CATEGORY_KEYWORDS = ("분류", "구분", "유형", "카테고리", "부서", "지역", "비목", "과목", "계정")
 _NAME_KEYWORDS = ("이름", "명", "비용명", "항목", "항목명", "품목", "제품", "사업명", "과제명")
+_ID_LIKE_KEYWORDS = ("코드", "번호", "id", "no", "연도", "월", "일")
 
 
 def _is_mostly_numeric(series: pd.Series) -> bool:
@@ -21,6 +22,11 @@ def _is_mostly_numeric(series: pd.Series) -> bool:
         errors="coerce",
     )
     return numeric.notna().sum() >= max(1, len(series.dropna()) * 0.5)
+
+
+def _is_id_like_column(name: str) -> bool:
+    lowered = str(name).strip().lower()
+    return any(keyword in lowered for keyword in _ID_LIKE_KEYWORDS)
 
 
 def profile_dataframe(df: pd.DataFrame, domain: str | None = None) -> dict:
@@ -49,6 +55,8 @@ def profile_dataframe(df: pd.DataFrame, domain: str | None = None) -> dict:
 
     for col in column_names:
         if col in unnamed_columns:
+            continue
+        if _is_id_like_column(col):
             continue
         if col in numeric_columns or any(kw in col for kw in _AMOUNT_KEYWORDS):
             likely_amount_columns.append(col)

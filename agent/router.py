@@ -321,9 +321,11 @@ def _try_context_top_n(msg: str, profile: dict) -> dict | None:
     if not any(kw in msg for kw in _TOP_MAX_KEYWORDS + _TOP_MIN_KEYWORDS + ("상위", "최고")):
         return None
     column_hint = _extract_column_hint(msg, profile)
+    auto_selected = False
     if not column_hint:
         likely = profile.get("likely_amount_columns") or []
         column_hint = likely[0] if likely else None
+        auto_selected = bool(column_hint)
     if not column_hint:
         return None
     n = _extract_n(msg, default=3)
@@ -336,6 +338,7 @@ def _try_context_top_n(msg: str, profile: dict) -> dict | None:
             "n": n,
             "ascending": ascending,
             "source": LAST_RESULT_TABLE,
+            "_auto_selected_column": auto_selected,
         }],
     )
 

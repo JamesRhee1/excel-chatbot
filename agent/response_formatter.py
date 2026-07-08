@@ -222,6 +222,8 @@ def _format_top_n_message(
             f"{resolved_col}이(가) 가장 {direction} 항목은 **{label}**이며, "
             f"금액은 {_format_amount(val)}입니다."
         )
+    if op.get("_auto_selected_column"):
+        body += f"\n정렬 기준: {resolved_col} (자동 선택)"
     return intro + body
 
 
@@ -465,6 +467,8 @@ def format_user_response(
         col = resolved.get(sort_op.get("column", ""), sort_op.get("column", ""))
         direction = "오름차순" if sort_op.get("ascending", True) else "내림차순"
         message = f"{col} 기준 {direction} 정렬 결과입니다."
+        if sort_op.get("_auto_selected_column"):
+            message += f"\n정렬 기준: {col} (자동 선택)"
     elif primary == "filter" and raw_df is not None:
         if raw_df.empty:
             filter_op = next((op for op in operations if op.get("type") == "filter"), {})

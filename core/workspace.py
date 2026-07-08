@@ -35,6 +35,7 @@ class Workspace:
 
     def __init__(self) -> None:
         self._tables: dict[str, Table] = {}
+        self._state: dict[str, object] = {}
 
     def add_table(
         self,
@@ -63,6 +64,12 @@ class Workspace:
 
     def list_tables(self) -> list[str]:
         return list(self._tables.keys())
+
+    def get_state(self, key: str, default: object | None = None) -> object | None:
+        return self._state.get(key, default)
+
+    def set_state(self, key: str, value: object) -> None:
+        self._state[key] = value
 
     def remove(self, name: str) -> bool:
         if name not in self._tables:
