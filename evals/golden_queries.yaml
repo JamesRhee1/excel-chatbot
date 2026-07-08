@@ -185,3 +185,16 @@ queries:
     fixture: budget_comparison.xlsx
     expected_route: llm
     expected_ops: [clarify]
+
+  # --- 2차 회귀 (G6) ---
+  - id: llm_auto_rank_top3
+    query: "상위 3개 보여줘"
+    fixture: budget_comparison.xlsx
+    expected_route: llm
+    expected_ops: [top_n]
+
+  - id: llm_derive_sort_new_column
+    query: "당년도집행을 당년도예산으로 나눈 수익률 기준으로 정렬해줘"
+    fixture: budget_comparison.xlsx
+    expected_route: llm
+    expected_ops: [derive, sort]
