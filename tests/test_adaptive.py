@@ -53,6 +53,23 @@ def test_resolve_column_synonym_danghae(budget_df, budget_profile):
     assert resolve_column("당해예산", budget_df, budget_profile) == "당년도예산"
 
 
+def test_resolve_column_formula_raises(budget_df, budget_profile):
+    with pytest.raises(ValueError, match="수식은 컬럼명으로"):
+        resolve_column("집행계_당해집행 / 당년도예산", budget_df, budget_profile)
+
+
+@patch("agent.executor.route_query", return_value=None)
+@patch("llm.intent.chat")
+def test_executor_formula_column_error_message(mock_chat, _mock_route, budget_excel):
+    mock_chat.return_value = (
+        '{"answer_type":"dataframe","operations":[{"type":"top_n","column":"집행계_당해집행 / 당년도예산",'
+        '"n":1,"ascending":false}],"message":"","final_response_instruction":""}'
+    )
+    result = run(budget_excel, "수익률이 가장 높은 행")
+    assert result["success"] is False
+    assert "수식은 컬럼명으로" in (result.get("error") or "")
+
+
 def test_profile_detects_column_roles(budget_profile):
     assert "당년도예산" in budget_profile["likely_amount_columns"]
     assert "비목분류" in budget_profile["likely_category_columns"]

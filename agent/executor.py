@@ -631,6 +631,8 @@ def _missing_column_message(exc: KeyError, profile: dict) -> str:
 
 def _format_value_error(exc: ValueError, profile: dict) -> str:
     message = str(exc)
+    if "수식은 컬럼명으로" in message:
+        return message
     if "찾지 못했습니다" in message or "찾을 수 없" in message:
         examples = profile.get("domain_example_queries") or [
             "가장 높은 행 찾아줘",

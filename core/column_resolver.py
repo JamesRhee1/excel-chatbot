@@ -22,6 +22,14 @@ def _candidate_columns(df: pd.DataFrame, profile: dict) -> list[str]:
     return preferred or df.columns.astype(str).tolist()
 
 
+_FORMULA_OP_PATTERN = re.compile(r"[/\*\+]|(?<=\s)-(?=\s)")
+_FORMULA_COLUMN_ERROR = "수식은 컬럼명으로 사용할 수 없습니다. 파생 컬럼(derive)을 사용하세요."
+
+
+def _looks_like_formula(expr: str) -> bool:
+    return bool(_FORMULA_OP_PATTERN.search(expr))
+
+
 def _format_candidates(candidates: list[str], limit: int = 5) -> str:
     shown = candidates[:limit]
     text = ", ".join(shown)
@@ -46,6 +54,9 @@ def resolve_column(user_expression: str, df: pd.DataFrame, profile: dict) -> str
     for col in columns:
         if _normalize(col) == user_norm:
             return col
+
+    if _looks_like_formula(user_col):
+        raise ValueError(_FORMULA_COLUMN_ERROR)
 
     canonical = _synonyms(profile).get(user_col) or _synonyms(profile).get(user_norm)
     if canonical:
