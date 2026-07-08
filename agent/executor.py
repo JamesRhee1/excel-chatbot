@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +17,7 @@ from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, valida
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
 from core.workspace import LAST_RESULT_TABLE, Workspace
+from core.trace import TraceRecord, TraceWriter, new_trace_id, utc_timestamp
 from core.verification import verify_operation
 from core.writer import save_excel
 from domains.registry import apply_derived_metrics
@@ -25,6 +27,7 @@ from llm.intent import IntentParseError, parse_intent
 DEFAULT_MAIN_TABLE = "main"
 DEFAULT_COMBINED_TABLE = "combined"
 _CONTEXT_SOURCE_HINTS = ("직전 결과에서", "여기서", "이 중에서")
+_TRACE_WRITER = TraceWriter()
 
 
 def _apply_context_source(intent: dict, user_message: str) -> dict:
@@ -42,6 +45,50 @@ def _apply_context_source(intent: dict, user_message: str) -> dict:
     return intent
 
 
+def _emit_run_trace(
+    *,
+    trace_id: str,
+    started: float,
+    user_message: str,
+    route_path: str,
+    intent: dict,
+    operations_applied: list[dict],
+    per_op_ms: list[float],
+    verification_summaries: list[str],
+    answer_type: str,
+    error: str | None,
+    input_rows: int | None,
+    input_columns: list[str],
+    output_rows: int | None,
+    output_columns: list[str],
+) -> None:
+    total_ms = (time.perf_counter() - started) * 1000
+    _TRACE_WRITER.write(
+        TraceRecord(
+            trace_id=trace_id,
+            timestamp=utc_timestamp(),
+            user_message=user_message,
+            route_path=route_path,
+            intent=intent,
+            operations_applied=operations_applied,
+            per_op_ms=per_op_ms,
+            verification_summaries=verification_summaries,
+            answer_type=answer_type,
+            error=error,
+            total_ms=total_ms,
+            input_rows=input_rows,
+            input_columns=input_columns,
+            output_rows=output_rows,
+            output_columns=output_columns,
+        )
+    )
+
+
+def _attach_trace_id(result: dict, trace_id: str) -> dict:
+    result["trace_id"] = trace_id
+    return result
+
+
 def run(
     file_path: str | None = None,
     user_message: str = "",
@@ -52,6 +99,20 @@ def run(
     file_results: list[dict] | None = None,
     workspace: Workspace | None = None,
 ) -> dict:
+    trace_id = new_trace_id()
+    started = time.perf_counter()
+    route_path = "rule"
+    intent: dict = {}
+    operations_applied: list[dict] = []
+    per_op_ms: list[float] = []
+    verification_summaries: list[str] = []
+    answer_type = "message"
+    input_rows: int | None = None
+    input_columns: list[str] = []
+    output_rows: int | None = None
+    output_columns: list[str] = []
+    result: dict | None = None
+
     profile: dict = {}
     ws = workspace or Workspace()
     default_table = DEFAULT_MAIN_TABLE
@@ -83,124 +144,167 @@ def run(
             file_summary = build_multi_file_summary(combined_df, profile=combined_profile)
 
         if not ws.list_tables():
-            return _error_result("분석할 데이터가 없습니다.")
+            result = _error_result("분석할 데이터가 없습니다.")
+        else:
+            if ws.get(LAST_RESULT_TABLE) and not file_path and not file_results:
+                default_table = LAST_RESULT_TABLE
+                last_table = ws.get(LAST_RESULT_TABLE)
+                if last_table:
+                    profile = last_table.profile
+            elif not profile:
+                table = ws.get(default_table)
+                profile = table.profile if table else {}
+            elif ws.get(default_table) is None:
+                table = ws.get(ws.list_tables()[0])
+                default_table = table.name if table else default_table
+                profile = table.profile if table else profile
 
-        if ws.get(LAST_RESULT_TABLE) and not file_path and not file_results:
-            default_table = LAST_RESULT_TABLE
-            last_table = ws.get(LAST_RESULT_TABLE)
-            if last_table:
-                profile = last_table.profile
-        elif not profile:
+            intent = route_query(user_message, profile) or {}
+            route_path = "rule" if intent else "llm"
+            if not intent:
+                intent = parse_intent(user_message, profile, model=model)
+            intent = prepend_exclude_summary(intent, user_message, profile)
+            intent = _apply_context_source(intent, user_message)
+
             table = ws.get(default_table)
-            profile = table.profile if table else {}
-        elif ws.get(default_table) is None:
-            table = ws.get(ws.list_tables()[0])
-            default_table = table.name if table else default_table
-            profile = table.profile if table else profile
+            if table and table.df is not None:
+                input_rows = len(table.df)
+                input_columns = list(table.df.columns.astype(str))
 
-        intent = route_query(user_message, profile)
-        if intent is None:
-            intent = parse_intent(user_message, profile, model=model)
-        intent = prepend_exclude_summary(intent, user_message, profile)
-        intent = _apply_context_source(intent, user_message)
-
-        if dry_run:
-            return _success_result(
-                answer_type=intent.get("answer_type", "dataframe"),
-                operations=intent["operations"],
-                message=intent.get("message") or None,
-                profile=_profile_summary(profile),
-            )
-
-        validate_pipeline(intent["operations"], ws)
-
-        table = ws.get(default_table)
-        context = {
-            "combined_df": combined_df if combined_df is not None else (table.df if table else None),
-            "file_summary": file_summary,
-        }
-        execution = _apply_operations_workspace(
-            ws,
-            intent["operations"],
-            default_table=default_table,
-            context=context,
-        )
-
-        if execution.get("df") is not None and isinstance(execution["df"], pd.DataFrame) and not execution["df"].empty:
-            result_domain = profile.get("domain", "generic")
-            ws.upsert_table(
-                LAST_RESULT_TABLE,
-                execution["df"],
-                source="previous_turn",
-                domain=result_domain,
-                profile=profile_dataframe(execution["df"], domain=result_domain),
-            )
-
-        message, display_df, raw_df = format_user_response(
-            user_message,
-            intent,
-            execution,
-            profile,
-            combined_df=context.get("combined_df"),
-            file_summary=context.get("file_summary"),
-        )
-
-        verification_reports = execution.get("verification", [])
-        failed_summaries = [
-            report["summary"] for report in verification_reports if not report.get("passed")
-        ]
-        if failed_summaries:
-            warning_block = "\n".join(f"⚠ 검증 경고: {summary}" for summary in failed_summaries)
-            message = f"{warning_block}\n\n{message}" if message else warning_block
-
-        saved_path: str | None = None
-        backup_path: str | None = None
-        if output_path is not None and raw_df is not None:
-            dest = Path(output_path)
-            had_existing = dest.exists()
-            saved_path = save_excel(raw_df, output_path, backup=True)
-            if had_existing:
-                backups = sorted(
-                    dest.parent.glob(f"{dest.name}.bak_*"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
+            if dry_run:
+                operations_applied = list(intent.get("operations") or [])
+                answer_type = intent.get("answer_type", "dataframe")
+                result = _success_result(
+                    answer_type=answer_type,
+                    operations=operations_applied,
+                    message=intent.get("message") or None,
+                    profile=_profile_summary(profile),
                 )
-                backup_path = str(backups[0]) if backups else None
+            else:
+                validate_pipeline(intent["operations"], ws)
 
-        answer_type = intent.get("answer_type", "dataframe")
-        if display_df is not None and message:
-            answer_type = "mixed"
-        elif message and display_df is None:
-            answer_type = "message"
+                context = {
+                    "combined_df": combined_df if combined_df is not None else (table.df if table else None),
+                    "file_summary": file_summary,
+                }
+                execution = _apply_operations_workspace(
+                    ws,
+                    intent["operations"],
+                    default_table=default_table,
+                    context=context,
+                )
+                operations_applied = execution.get("applied", [])
+                per_op_ms = execution.get("per_op_ms", [])
+                verification_summaries = [
+                    report["summary"] for report in execution.get("verification", [])
+                ]
 
-        return _success_result(
-            answer_type=answer_type,
-            df=display_df,
-            raw_df=raw_df,
-            combined_df=context.get("combined_df"),
-            operations=execution.get("applied", []),
-            message=message,
-            debug_logs=execution.get("debug_logs", []),
-            profile=_profile_summary(profile),
-            file_summary=context.get("file_summary"),
-            saved_path=saved_path,
-            backup_path=backup_path,
-            workspace=ws,
-            verification=verification_reports,
-        )
+                if route_path == "llm" and operations_applied and all(
+                    op.get("type") == "clarify" for op in operations_applied
+                ):
+                    route_path = "llm_fallback_clarify"
+
+                if execution.get("df") is not None and isinstance(execution["df"], pd.DataFrame) and not execution["df"].empty:
+                    result_domain = profile.get("domain", "generic")
+                    ws.upsert_table(
+                        LAST_RESULT_TABLE,
+                        execution["df"],
+                        source="previous_turn",
+                        domain=result_domain,
+                        profile=profile_dataframe(execution["df"], domain=result_domain),
+                    )
+
+                message, display_df, raw_df = format_user_response(
+                    user_message,
+                    intent,
+                    execution,
+                    profile,
+                    combined_df=context.get("combined_df"),
+                    file_summary=context.get("file_summary"),
+                )
+
+                verification_reports = execution.get("verification", [])
+                failed_summaries = [
+                    report["summary"] for report in verification_reports if not report.get("passed")
+                ]
+                if failed_summaries:
+                    warning_block = "\n".join(f"⚠ 검증 경고: {summary}" for summary in failed_summaries)
+                    message = f"{warning_block}\n\n{message}" if message else warning_block
+
+                saved_path: str | None = None
+                backup_path: str | None = None
+                if output_path is not None and raw_df is not None:
+                    dest = Path(output_path)
+                    had_existing = dest.exists()
+                    saved_path = save_excel(raw_df, output_path, backup=True)
+                    if had_existing:
+                        backups = sorted(
+                            dest.parent.glob(f"{dest.name}.bak_*"),
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True,
+                        )
+                        backup_path = str(backups[0]) if backups else None
+
+                answer_type = intent.get("answer_type", "dataframe")
+                if display_df is not None and message:
+                    answer_type = "mixed"
+                elif message and display_df is None:
+                    answer_type = "message"
+
+                result_df = raw_df if raw_df is not None else execution.get("df")
+                if isinstance(result_df, pd.DataFrame):
+                    output_rows = len(result_df)
+                    output_columns = list(result_df.columns.astype(str))
+
+                result = _success_result(
+                    answer_type=answer_type,
+                    df=display_df,
+                    raw_df=raw_df,
+                    combined_df=context.get("combined_df"),
+                    operations=operations_applied,
+                    message=message,
+                    debug_logs=execution.get("debug_logs", []),
+                    profile=_profile_summary(profile),
+                    file_summary=context.get("file_summary"),
+                    saved_path=saved_path,
+                    backup_path=backup_path,
+                    workspace=ws,
+                    verification=verification_reports,
+                )
 
     except (IntentParseError, PipelineValidationError) as exc:
-        return _error_result(str(exc))
+        result = _error_result(str(exc))
     except OllamaConnectionError as exc:
-        return _error_result(str(exc))
+        result = _error_result(str(exc))
     except OllamaModelNotFoundError as exc:
-        return _error_result(str(exc))
+        result = _error_result(str(exc))
     except KeyError as exc:
-        return _error_result(_missing_column_message(exc, profile))
+        result = _error_result(_missing_column_message(exc, profile))
     except ValueError as exc:
-        return _error_result(_format_value_error(exc, profile))
+        result = _error_result(_format_value_error(exc, profile))
     except Exception as exc:
-        return _error_result(f"예상치 못한 오류가 발생했습니다: {exc}")
+        result = _error_result(f"예상치 못한 오류가 발생했습니다: {exc}")
+
+    if result is None:
+        result = _error_result("알 수 없는 오류가 발생했습니다.")
+
+    _emit_run_trace(
+        trace_id=trace_id,
+        started=started,
+        user_message=user_message,
+        route_path=route_path,
+        intent=intent,
+        operations_applied=operations_applied,
+        per_op_ms=per_op_ms,
+        verification_summaries=verification_summaries,
+        answer_type=result.get("answer_type", answer_type),
+        error=result.get("error"),
+        input_rows=input_rows,
+        input_columns=input_columns,
+        output_rows=output_rows,
+        output_columns=output_columns,
+    )
+    return _attach_trace_id(result, trace_id)
 
 
 def _apply_operations_workspace(
@@ -219,6 +323,7 @@ def _apply_operations_workspace(
     produced_dataframe = False
     prev_output: str | None = None
     verification: list[dict] = []
+    per_op_ms: list[float] = []
 
     for index, operation in enumerate(operations):
         spec = OPERATION_SPEC_BY_TYPE[operation["type"]]
@@ -240,6 +345,7 @@ def _apply_operations_workspace(
 
         input_df = current_df.copy()
 
+        op_started = time.perf_counter()
         try:
             outcome = apply_operation(
                 current_df,
@@ -249,6 +355,7 @@ def _apply_operations_workspace(
             )
         except (KeyError, ValueError) as exc:
             raise ValueError(str(exc)) from exc
+        per_op_ms.append((time.perf_counter() - op_started) * 1000)
 
         resolved_columns.update(outcome.get("resolved_columns") or {})
         if outcome.get("value_metadata"):
@@ -294,6 +401,7 @@ def _apply_operations_workspace(
         "value_metadata": value_metadata,
         "applied": applied,
         "verification": verification,
+        "per_op_ms": per_op_ms,
     }
 
 
