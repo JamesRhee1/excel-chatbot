@@ -10,9 +10,10 @@ import pandas as pd
 import streamlit as st
 
 from agent.executor import run
-from core.multi_loader import load_multiple_excels
+from core.multi_loader import load_into_workspace, load_multiple_excels
 from core.profiler import profile_dataframe
-from core.reader import load_excel, load_excel_with_domain, list_sheets, summarize
+from core.reader import load_excel_with_domain
+from core.workspace import Workspace
 
 MODEL_OPTIONS = [
     "qwen2.5:7b",
@@ -40,6 +41,7 @@ def _init_session_state() -> None:
         "combined_df": None,
         "last_combined_df": None,
         "last_multi_result_df": None,
+        "workspace": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -51,6 +53,7 @@ def _init_session_state() -> None:
         st.session_state.last_result_df = None
         st.session_state.last_combined_df = None
         st.session_state.last_multi_result_df = None
+        st.session_state.workspace = None
 
 
 def _save_upload(uploaded_file) -> str:
@@ -193,6 +196,7 @@ def _handle_uploads(uploaded_files: list | None) -> None:
     st.session_state.last_result_df = None
     st.session_state.last_multi_result_df = None
     st.session_state.last_combined_df = None
+    st.session_state.workspace = Workspace()
 
     if len(uploaded_files) == 1:
         st.session_state.multi_mode = False
@@ -203,6 +207,7 @@ def _handle_uploads(uploaded_files: list | None) -> None:
         st.session_state.uploaded_name = f.name
         df, domain = load_excel_with_domain(st.session_state.file_path)
         st.session_state.profile = profile_dataframe(df, domain=domain)
+        st.session_state.workspace.upsert_table("main", df, st.session_state.file_path, domain=domain)
         st.session_state.preview_df = df.head(10)
         return
 
@@ -212,7 +217,7 @@ def _handle_uploads(uploaded_files: list | None) -> None:
     st.session_state.profile = None
     st.session_state.preview_df = None
 
-    file_results = load_multiple_excels(uploaded_files)
+    file_results = load_into_workspace(st.session_state.workspace, uploaded_files)
     st.session_state.file_results = file_results
 
     # Build combined preview for multi mode
@@ -282,23 +287,31 @@ def _append_assistant_message(result: dict) -> None:
 def _process_user_message(user_message: str, model: str) -> None:
     st.session_state.messages.append({"role": "user", "content": user_message})
 
+    ws = st.session_state.get("workspace")
+    if ws is None:
+        ws = Workspace()
+        st.session_state.workspace = ws
+
+    run_kwargs: dict = {"user_message": user_message, "model": model, "workspace": ws}
+
     if st.session_state.multi_mode:
         if not st.session_state.file_results:
             st.session_state.messages.append({"role": "assistant", "content": "엑셀 파일을 먼저 업로드하세요."})
             return
-        with st.spinner("다중 파일을 분석하는 중..."):
-            result = run(
-                user_message=user_message,
-                file_results=st.session_state.file_results,
-                workspace=st.session_state.get("workspace"),
-                model=model,
-            )
+        if not ws.get("combined"):
+            run_kwargs["file_results"] = st.session_state.file_results
     else:
         if not st.session_state.file_path:
             st.session_state.messages.append({"role": "assistant", "content": "엑셀 파일을 먼저 업로드하세요."})
             return
-        with st.spinner("데이터를 분석하는 중..."):
-            result = run(st.session_state.file_path, user_message, model=model)
+        if not ws.get("main"):
+            run_kwargs["file_path"] = st.session_state.file_path
+
+    with st.spinner("데이터를 분석하는 중..."):
+        result = run(**run_kwargs)
+
+    if result.get("workspace") is not None:
+        st.session_state.workspace = result["workspace"]
 
     if result["success"]:
         _append_assistant_message(result)

@@ -9,6 +9,8 @@ import pandas as pd
 from core.profiler import profile_dataframe
 from domains.registry import infer_domain_from_columns
 
+LAST_RESULT_TABLE = "last_result"
+
 
 @dataclass(frozen=True)
 class TableRef:
@@ -67,6 +69,27 @@ class Workspace:
             return False
         del self._tables[name]
         return True
+
+    def upsert_table(
+        self,
+        name: str,
+        df: pd.DataFrame,
+        source: str,
+        *,
+        domain: str | None = None,
+        profile: dict | None = None,
+    ) -> str:
+        """Register or replace a table at an exact name (no suffix)."""
+        resolved_domain = domain or infer_domain_from_columns([str(c) for c in df.columns.tolist()])
+        resolved_profile = profile or profile_dataframe(df, domain=resolved_domain)
+        self._tables[name] = Table(
+            name=name,
+            df=df,
+            profile=resolved_profile,
+            domain=resolved_domain,
+            source=source,
+        )
+        return name
 
     def _resolve_name(self, name: str) -> str:
         if name not in self._tables:

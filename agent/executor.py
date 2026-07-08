@@ -15,7 +15,7 @@ from core.multi_operations import build_multi_file_summary
 from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, validate_pipeline
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
-from core.workspace import Workspace
+from core.workspace import LAST_RESULT_TABLE, Workspace
 from core.writer import save_excel
 from domains.registry import apply_derived_metrics
 from llm.client import OllamaConnectionError, OllamaModelNotFoundError
@@ -23,6 +23,22 @@ from llm.intent import IntentParseError, parse_intent
 
 DEFAULT_MAIN_TABLE = "main"
 DEFAULT_COMBINED_TABLE = "combined"
+_CONTEXT_SOURCE_HINTS = ("직전 결과에서", "여기서", "이 중에서")
+
+
+def _apply_context_source(intent: dict, user_message: str) -> dict:
+    if not any(hint in user_message for hint in _CONTEXT_SOURCE_HINTS):
+        return intent
+    intent = dict(intent)
+    updated_ops: list[dict] = []
+    for op in intent.get("operations") or []:
+        new_op = dict(op)
+        spec = OPERATION_SPEC_BY_TYPE.get(new_op.get("type", ""))
+        if spec and spec.allows_source:
+            new_op.setdefault("source", LAST_RESULT_TABLE)
+        updated_ops.append(new_op)
+    intent["operations"] = updated_ops
+    return intent
 
 
 def run(
@@ -44,25 +60,23 @@ def run(
     try:
         if file_path:
             df, domain = load_excel_with_domain(file_path, sheet_name=sheet_name)
-            if ws.get(DEFAULT_MAIN_TABLE) is None:
-                ws.add_table(DEFAULT_MAIN_TABLE, df, source=file_path, domain=domain)
+            ws.upsert_table(DEFAULT_MAIN_TABLE, df, source=file_path, domain=domain)
             default_table = DEFAULT_MAIN_TABLE
             profile = ws.get(DEFAULT_MAIN_TABLE).profile  # type: ignore[union-attr]
 
-        if file_results:
+        elif file_results:
             combined_df = build_combined_dataset(file_results)
             combined_profile = profile_dataframe(combined_df)
             domain = combined_profile.get("domain", "generic")
             combined_df = apply_derived_metrics(combined_df, domain)
             combined_profile = profile_dataframe(combined_df, domain=domain)
-            if ws.get(DEFAULT_COMBINED_TABLE) is None:
-                ws.add_table(
-                    DEFAULT_COMBINED_TABLE,
-                    combined_df,
-                    source="union",
-                    domain=domain,
-                    profile=combined_profile,
-                )
+            ws.upsert_table(
+                DEFAULT_COMBINED_TABLE,
+                combined_df,
+                source="union",
+                domain=domain,
+                profile=combined_profile,
+            )
             default_table = DEFAULT_COMBINED_TABLE
             profile = combined_profile
             file_summary = build_multi_file_summary(combined_df, profile=combined_profile)
@@ -70,14 +84,24 @@ def run(
         if not ws.list_tables():
             return _error_result("분석할 데이터가 없습니다.")
 
-        if not profile:
+        if ws.get(LAST_RESULT_TABLE) and not file_path and not file_results:
+            default_table = LAST_RESULT_TABLE
+            last_table = ws.get(LAST_RESULT_TABLE)
+            if last_table:
+                profile = last_table.profile
+        elif not profile:
             table = ws.get(default_table)
             profile = table.profile if table else {}
+        elif ws.get(default_table) is None:
+            table = ws.get(ws.list_tables()[0])
+            default_table = table.name if table else default_table
+            profile = table.profile if table else profile
 
         intent = route_query(user_message, profile)
         if intent is None:
             intent = parse_intent(user_message, profile, model=model)
         intent = prepend_exclude_summary(intent, user_message, profile)
+        intent = _apply_context_source(intent, user_message)
 
         if dry_run:
             return _success_result(
@@ -100,6 +124,16 @@ def run(
             default_table=default_table,
             context=context,
         )
+
+        if execution.get("df") is not None and isinstance(execution["df"], pd.DataFrame) and not execution["df"].empty:
+            result_domain = profile.get("domain", "generic")
+            ws.upsert_table(
+                LAST_RESULT_TABLE,
+                execution["df"],
+                source="previous_turn",
+                domain=result_domain,
+                profile=profile_dataframe(execution["df"], domain=result_domain),
+            )
 
         message, display_df, raw_df = format_user_response(
             user_message,
@@ -142,6 +176,7 @@ def run(
             file_summary=context.get("file_summary"),
             saved_path=saved_path,
             backup_path=backup_path,
+            workspace=ws,
         )
 
     except (IntentParseError, PipelineValidationError) as exc:
@@ -260,6 +295,7 @@ def _success_result(
     file_summary: dict | None = None,
     saved_path: str | None = None,
     backup_path: str | None = None,
+    workspace: Workspace | None = None,
 ) -> dict:
     return {
         "success": True,
@@ -274,6 +310,7 @@ def _success_result(
         "file_summary": file_summary,
         "saved_path": saved_path,
         "backup_path": backup_path,
+        "workspace": workspace,
         "error": None,
     }
 

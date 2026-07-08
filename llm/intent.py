@@ -42,6 +42,7 @@ Rules:
 - NEVER return empty operations without clarify message
 - filter op: >, <, >=, <=, ==, !=, <>, contains  (<> means not equal)
 - Use exclude_summary implicitly via planner only when user asks to ignore total rows; executor auto-excludes 합계/소계 rows for ranking/sort/aggregate
+- When user says "직전 결과에서", "여기서", or "이 중에서", set source to "last_result"
 """
 
 def clarify_message(profile: dict | None = None) -> str:
