@@ -8,8 +8,8 @@ from typing import Any
 
 import pandas as pd
 
-from core.profiler import profile_dataframe
 from core.reader import list_sheets, load_excel_with_domain
+from core.workspace import Workspace
 
 
 def _resolve_file_name(item: Any) -> str:
@@ -51,11 +51,17 @@ def _materialize_upload(item: Any) -> tuple[str, bool]:
     return tmp.name, True
 
 
-def load_multiple_excels(
+def _table_name_from_file(file_name: str) -> str:
+    stem = Path(file_name).stem
+    return stem or file_name
+
+
+def load_into_workspace(
+    workspace: Workspace,
     uploaded_files: list[Any],
     sheet_name: str | int = 0,
 ) -> list[dict]:
-    """Load and profile multiple Excel files; failures are recorded per file."""
+    """Load files into workspace tables; return per-file load results."""
     results: list[dict] = []
 
     for item in uploaded_files or []:
@@ -68,17 +74,26 @@ def load_multiple_excels(
 
             raw = pd.read_excel(path, sheet_name=sheet_name, header=None)
             normalized_df, domain = load_excel_with_domain(path, sheet_name=sheet_name)
-            profile = profile_dataframe(normalized_df, domain=domain)
             resolved_sheet = _resolve_sheet_name(path, sheet_name)
+            source = f"{file_name}/{resolved_sheet}"
+            table_name = workspace.add_table(
+                _table_name_from_file(file_name),
+                normalized_df,
+                source,
+                domain=domain,
+            )
+            table = workspace.get(table_name)
+            assert table is not None
 
             results.append(
                 {
                     "file_name": file_name,
                     "sheet_name": resolved_sheet,
+                    "table_name": table_name,
                     "success": True,
                     "raw_df": raw,
                     "normalized_df": normalized_df,
-                    "profile": profile,
+                    "profile": table.profile,
                     "error": None,
                 }
             )
@@ -87,6 +102,7 @@ def load_multiple_excels(
                 {
                     "file_name": file_name,
                     "sheet_name": str(sheet_name),
+                    "table_name": None,
                     "success": False,
                     "raw_df": None,
                     "normalized_df": None,
@@ -102,3 +118,12 @@ def load_multiple_excels(
                     pass
 
     return results
+
+
+def load_multiple_excels(
+    uploaded_files: list[Any],
+    sheet_name: str | int = 0,
+) -> list[dict]:
+    """Load and profile multiple Excel files; failures are recorded per file."""
+    workspace = Workspace()
+    return load_into_workspace(workspace, uploaded_files, sheet_name=sheet_name)
