@@ -92,6 +92,51 @@ queries:
     expected_answer:
       row_count: 1
 
+  # --- 실사용 회귀 (6) ---
+  - id: rule_olhae_budget_top
+    query: "올해 예산 제일 높은거"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type, top_n]
+    expected_answer:
+      row_count: 1
+
+  - id: llm_typo_budget_sort
+    query: "당년도예싼 높은 순으로"
+    fixture: budget_comparison.xlsx
+    expected_route: llm
+    expected_ops: [sort]
+
+  - id: llm_profit_rate_top
+    query: "수익률이 가장 높은 행"
+    fixture: budget_comparison.xlsx
+    expected_route: llm
+    expected_ops: [derive, top_n]
+
+  - id: rule_budget_gt_zero
+    query: "당년도예산 0보다 큰 항목 보여줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type, filter]
+    expected_answer:
+      row_count: 2
+
+  - id: rule_budget_show_all
+    query: "당년도 예산 항목 다 보여줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type]
+    expected_answer:
+      row_count: 2
+
+  - id: rule_budget_gt_zero_prefixed
+    query: "전체 데이터에서 당년도예산 0보다 높은거 보여줘"
+    fixture: budget_comparison.xlsx
+    expected_route: rule
+    expected_ops: [filter_row_type, filter]
+    expected_answer:
+      row_count: 2
+
   # --- LLM 경로 (8) ---
   - id: llm_select_columns
     query: "이름, 매출 두 컬럼만 선택해줘"
