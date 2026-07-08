@@ -97,6 +97,35 @@ def test_route_sort_desc(budget_profile):
     assert intent["operations"][0]["ascending"] is False
 
 
+def test_route_filter_budget_gt_zero_no_josa(budget_profile):
+    intent = route_query("당년도예산 0보다 큰 항목 보여줘", budget_profile)
+    assert intent is not None
+    assert intent["operations"][0]["type"] == "filter"
+    assert intent["operations"][0]["op"] == ">"
+    assert intent["operations"][0]["value"] == 0
+
+
+def test_route_filter_budget_gt_zero_with_prefix(budget_profile):
+    intent = route_query("전체 데이터에서 당년도예산 0보다 높은거 보여줘", budget_profile)
+    assert intent is not None
+    assert intent["operations"][0]["type"] == "filter"
+    assert intent["operations"][0]["op"] == ">"
+    assert intent["operations"][0]["value"] == 0
+
+
+def test_route_show_all_budget_items_not_lookup(budget_profile):
+    intent = route_query("당년도 예산 항목 다 보여줘", budget_profile)
+    assert intent is not None
+    assert intent["operations"][0]["type"] in {"exclude_summary", "filter_row_type"}
+    assert not any(op.get("type") == "lookup" for op in intent["operations"])
+
+
+def test_route_top_n_jeil_high(budget_profile):
+    intent = route_query("올해 예산 제일 높은거", budget_profile)
+    assert intent is not None
+    assert intent["operations"][0]["type"] == "top_n"
+
+
 def test_validate_blocks_empty_group_by():
     intent = {
         "answer_type": "dataframe",

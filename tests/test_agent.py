@@ -202,8 +202,9 @@ def test_parse_intent_missing_operations_raises(mock_chat, sample_df: pd.DataFra
 # --- executor (mocked parse_intent) ---
 
 
+@patch("agent.executor.route_query", return_value=None)
 @patch("agent.executor.parse_intent")
-def test_executor_full_flow(mock_parse_intent, sample_excel: str, sample_df: pd.DataFrame) -> None:
+def test_executor_full_flow(mock_parse_intent, _mock_route, sample_excel: str, sample_df: pd.DataFrame) -> None:
     mock_parse_intent.return_value = {
         "operations": [
             {"type": "filter", "column": "매출", "op": ">", "value": 1500},
