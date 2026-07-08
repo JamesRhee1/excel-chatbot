@@ -6,6 +6,7 @@ from typing import Callable, TypedDict
 
 import pandas as pd
 
+from agent.op_registry import SUPPORTED_OPERATION_TYPES, validate_operation
 from core.column_resolver import resolve_column, resolve_columns
 from core.operations import (
     aggregate,
@@ -21,13 +22,7 @@ from core.operations import (
     value_answer,
 )
 
-_SUPPORTED_TYPES = frozenset(
-    {
-        "filter", "sort", "select", "aggregate", "top_n", "lookup",
-        "describe_dataset", "value_answer", "help", "summary_stats", "clarify",
-        "exclude_summary", "filter_row_type",
-    }
-)
+_SUPPORTED_TYPES = SUPPORTED_OPERATION_TYPES
 
 
 class ApplyResult(TypedDict, total=False):
@@ -205,6 +200,7 @@ def apply_operation(
         raise ValueError(
             f"지원하지 않는 operation type: {op_type!r}. 지원 타입: {supported}"
         )
+    validate_operation(operation, 0)
     if profile is None:
         from core.profiler import profile_dataframe
         profile = profile_dataframe(df)

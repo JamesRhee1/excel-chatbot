@@ -6,7 +6,11 @@ import json
 import logging
 import re
 
-from core.operations import normalize_filter_op
+from core.op_spec import (
+    build_json_schema_block,
+    validate_answer_type,
+    validate_operations,
+)
 from llm.client import chat
 
 logger = logging.getLogger(__name__)
@@ -24,23 +28,7 @@ Dataset profile:
 - sample values: {sample_values}
 
 Return ONLY valid JSON matching this schema:
-{{
-  "answer_type": "dataframe" | "message" | "mixed",
-  "operations": [
-    {{"type": "top_n", "column": "<expr>", "n": 1, "ascending": false}},
-    {{"type": "lookup", "query": "<text>"}},
-    {{"type": "value_answer", "row_query": "<item>"}},
-    {{"type": "describe_dataset"}},
-    {{"type": "help"}},
-    {{"type": "clarify", "message": "<ask user to rephrase>"}},
-    {{"type": "filter", "column": "<expr>", "op": ">", "value": 0}},
-    {{"type": "sort", "column": "<expr>", "ascending": false}},
-    {{"type": "aggregate", "group_by": ["<col>"], "agg_column": "<col>", "agg_func": "sum"}},
-    {{"type": "summary_stats", "column": "<expr>"}}
-  ],
-  "message": "",
-  "final_response_instruction": "short instruction for how to explain result"
-}}
+""" + build_json_schema_block() + """
 
 Rules:
 - NEVER invent numbers. Planning only.
@@ -56,15 +44,6 @@ Rules:
 - Use exclude_summary implicitly via planner only when user asks to ignore total rows; executor auto-excludes 합계/소계 rows for ranking/sort/aggregate
 """
 
-_SUPPORTED_TYPES = frozenset(
-    {
-        "filter", "sort", "select", "aggregate", "top_n", "lookup",
-        "describe_dataset", "value_answer", "help", "summary_stats", "clarify",
-        "exclude_summary", "filter_row_type",
-    }
-)
-_FILTER_OPS = frozenset({">", "<", ">=", "<=", "==", "!=", "<>", "contains"})
-_AGG_FUNCS = frozenset({"sum", "mean", "count", "max", "min"})
 UNKNOWN_MESSAGE = (
     "죄송합니다. 이 질문에는 확실하게 답변드리기 어렵습니다.\n\n"
     "업로드된 엑셀 파일 기준으로 아래처럼 다시 질문해 주시면 도움을 드릴 수 있습니다.\n"
@@ -140,55 +119,11 @@ def _validate_intent(intent: dict, profile: dict) -> None:
         raise IntentParseError('"operations"는 list여야 합니다.')
 
     answer_type = intent.get("answer_type", "dataframe")
-    if answer_type not in ("dataframe", "message", "mixed"):
-        raise IntentParseError(f'answer_type이 올바르지 않습니다: {answer_type!r}')
+    validate_answer_type(answer_type, on_error=IntentParseError)
 
     if not intent["operations"]:
         if not intent.get("message", "").strip():
             raise IntentParseError("실행할 작업이 없습니다.")
         return
 
-    for i, op in enumerate(intent["operations"]):
-        if not isinstance(op, dict) or "type" not in op:
-            raise IntentParseError(f"operations[{i}] 형식이 올바르지 않습니다.")
-        op_type = op["type"]
-        if op_type not in _SUPPORTED_TYPES:
-            raise IntentParseError(f"지원하지 않는 작업 type: {op_type!r}")
-
-        if op_type == "filter":
-            _require_fields(op, i, "column", "op", "value")
-            normalized_op = normalize_filter_op(op["op"])
-            if normalized_op not in _FILTER_OPS:
-                raise IntentParseError(f"filter op 오류: {op['op']!r}")
-            op["op"] = normalized_op
-        elif op_type == "sort":
-            _require_fields(op, i, "column")
-        elif op_type == "select":
-            _require_fields(op, i, "columns")
-        elif op_type == "aggregate":
-            _require_fields(op, i, "group_by", "agg_column", "agg_func")
-            if not op["group_by"]:
-                raise IntentParseError("group_by가 비어 있습니다. aggregate 대신 top_n을 사용하세요.")
-            if op["agg_func"] not in _AGG_FUNCS:
-                raise IntentParseError(f"agg_func 오류: {op['agg_func']!r}")
-        elif op_type == "top_n":
-            _require_fields(op, i, "column")
-        elif op_type == "lookup":
-            _require_fields(op, i, "query")
-        elif op_type == "value_answer":
-            _require_fields(op, i, "row_query")
-        elif op_type == "summary_stats":
-            _require_fields(op, i, "column")
-        elif op_type == "clarify":
-            if not op.get("message"):
-                raise IntentParseError("clarify에는 message가 필요합니다.")
-        elif op_type == "exclude_summary":
-            pass
-
-
-def _require_fields(op: dict, index: int, *fields: str) -> None:
-    for field in fields:
-        if field not in op:
-            raise IntentParseError(
-                f"operations[{index}] ({op.get('type', '?')})에 '{field}' 필드가 없습니다."
-            )
+    validate_operations(intent["operations"], on_error=IntentParseError)
