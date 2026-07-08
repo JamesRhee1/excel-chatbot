@@ -12,7 +12,7 @@ from agent.intent_utils import prepend_exclude_summary
 from agent.router import route_query
 from core.budget_table_normalizer import (
     OUTPUT_COLUMNS,
-    is_budget_comparison_sheet,
+    is_specialized_domain_sheet,
     normalize_budget_sheet,
 )
 from core.profiler import profile_dataframe
@@ -96,8 +96,8 @@ def budget_xlsx(tmp_path, raw_budget_df: pd.DataFrame) -> str:
 # --- detection / normalization ---
 
 
-def test_is_budget_comparison_sheet_detects_pattern(raw_budget_df: pd.DataFrame) -> None:
-    assert is_budget_comparison_sheet(raw_budget_df) is True
+def test_is_specialized_domain_sheet_detects_pattern(raw_budget_df: pd.DataFrame) -> None:
+    assert is_specialized_domain_sheet(raw_budget_df) is True
 
 
 def test_normalize_budget_sheet_column_names(normalized_budget_df: pd.DataFrame) -> None:

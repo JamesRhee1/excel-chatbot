@@ -354,6 +354,7 @@ class BudgetComparisonPack(DomainPack):
             balance_column_fallback="예산잔액_당해잔액",
             synonym_tip='정확한 컬럼명을 몰라도 됩니다. "당해예산" → "당년도예산"처럼 자동 해석합니다.',
             describe_label="예실대비표",
+            output_columns=tuple(OUTPUT_COLUMNS),
         )
 
     def detect(self, raw_df: pd.DataFrame) -> bool:
@@ -373,6 +374,9 @@ class BudgetComparisonPack(DomainPack):
         sheet_name: str | int = 0,
     ) -> pd.DataFrame:
         return normalize_budget_sheet(raw_df)
+
+    def add_derived_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
+        return add_budget_metrics(df)
 
 
 BUDGET_COMPARISON_PACK = BudgetComparisonPack()

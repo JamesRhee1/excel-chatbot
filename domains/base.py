@@ -41,6 +41,7 @@ class DomainPack:
     balance_column_fallback: str | None = None
     synonym_tip: str | None = None
     describe_label: str | None = None
+    output_columns: tuple[str, ...] = ()
 
     def detect(self, raw_df: pd.DataFrame) -> bool:
         return False
@@ -59,3 +60,7 @@ class DomainPack:
             return False
         cols = set(column_names)
         return all(col in cols for col in self.normalized_signature_columns)
+
+    def add_derived_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add domain-specific derived columns without mutating the input."""
+        return df.copy()

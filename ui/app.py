@@ -219,9 +219,11 @@ def _handle_uploads(uploaded_files: list | None) -> None:
     # Build combined preview for multi mode
     try:
         from core.dataset_builder import build_combined_dataset
-        from core.derived_metrics import add_budget_metrics
+        from domains.registry import apply_derived_metrics
 
-        combined = add_budget_metrics(build_combined_dataset(file_results))
+        combined = build_combined_dataset(file_results)
+        domain = profile_dataframe(combined).get("domain", "generic")
+        combined = apply_derived_metrics(combined, domain)
         st.session_state.combined_df = combined
         st.session_state.last_combined_df = combined
     except ValueError:

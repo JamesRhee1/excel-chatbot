@@ -20,6 +20,11 @@ def get_pack(name: str) -> DomainPack:
     return _PACK_BY_NAME.get(name, GENERIC_PACK)
 
 
+def apply_derived_metrics(df: pd.DataFrame, domain: str) -> pd.DataFrame:
+    """Apply domain-pack derived columns via the registry."""
+    return get_pack(domain).add_derived_metrics(df)
+
+
 def match_pack(raw_df: pd.DataFrame) -> DomainPack:
     """Return the first pack whose detect() matches, else generic."""
     for pack in _REGISTERED_PACKS:

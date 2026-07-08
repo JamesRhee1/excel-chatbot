@@ -7,7 +7,7 @@ import pytest
 
 from agent.multi_executor import run_multi
 from agent.multi_router import route_multi_query
-from core.derived_metrics import add_budget_metrics
+from domains.registry import apply_derived_metrics
 from core.dataset_builder import build_combined_dataset
 from core.multi_operations import (
     build_multi_file_summary,
@@ -70,7 +70,8 @@ def two_file_results() -> list[dict]:
 @pytest.fixture
 def combined_df(two_file_results):
     df = build_combined_dataset(two_file_results)
-    return add_budget_metrics(df)
+    profile = profile_dataframe(df)
+    return apply_derived_metrics(df, profile.get("domain", "generic"))
 
 
 @pytest.fixture
@@ -109,9 +110,7 @@ def test_build_combined_dataset_raises_when_all_failed():
 
 
 def test_add_budget_metrics(combined_df, normalized_budget_profile):
-    from domains.budget_comparison import add_budget_metrics
-
-    result = add_budget_metrics(combined_df)
+    result = apply_derived_metrics(combined_df, normalized_budget_profile["domain"])
     assert "집행률" in result.columns
     assert "잔액률" in result.columns
     assert "예산대비집행차이" in result.columns

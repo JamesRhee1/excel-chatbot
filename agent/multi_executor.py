@@ -15,6 +15,7 @@ from core.multi_operations import (
     top_n_overall,
 )
 from core.profiler import profile_dataframe
+from domains.registry import apply_derived_metrics
 
 
 def run_multi(
@@ -27,11 +28,9 @@ def run_multi(
     try:
         combined_df = build_combined_dataset(file_results)
         combined_profile = profile_dataframe(combined_df)
-        if combined_profile.get("domain") == "budget_comparison":
-            from domains.budget_comparison import add_budget_metrics
-
-            combined_df = add_budget_metrics(combined_df)
-            combined_profile = profile_dataframe(combined_df, domain="budget_comparison")
+        domain = combined_profile.get("domain", "generic")
+        combined_df = apply_derived_metrics(combined_df, domain)
+        combined_profile = profile_dataframe(combined_df, domain=domain)
         file_summary = build_multi_file_summary(combined_df, profile=combined_profile)
 
         intent = route_multi_query(user_message, combined_profile)
