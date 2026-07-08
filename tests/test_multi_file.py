@@ -9,7 +9,7 @@ from agent.executor import run
 from agent.router import route_query
 from domains.registry import apply_derived_metrics
 from core.dataset_builder import build_combined_dataset
-from core.multi_operations import (
+from core.table_operations import (
     build_multi_file_summary,
     compare_item_across_files,
     summarize_by_file,
@@ -120,7 +120,7 @@ def test_add_budget_metrics(combined_df, normalized_budget_profile):
         assert pd.notna(zero_row["집행률"].iloc[0]) or zero_row["집행률"].iloc[0] == 0
 
 
-# --- multi_operations ---
+# --- table_operations ---
 
 
 def test_summarize_by_file_budget_sum(combined_df):

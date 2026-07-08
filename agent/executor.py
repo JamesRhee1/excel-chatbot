@@ -11,7 +11,7 @@ from agent.response_formatter import format_user_response
 from agent.router import route_query
 from agent.tools import apply_operation
 from core.dataset_builder import build_combined_dataset
-from core.multi_operations import build_multi_file_summary
+from core.table_operations import build_multi_file_summary
 from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, validate_pipeline
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain

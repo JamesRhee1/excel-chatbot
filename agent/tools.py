@@ -8,7 +8,7 @@ import pandas as pd
 
 from agent.op_registry import SUPPORTED_OPERATION_TYPES, validate_operation
 from core.column_resolver import resolve_column, resolve_columns
-from core.multi_operations import (
+from core.table_operations import (
     build_multi_file_summary,
     compare_item_across_files,
     summarize_by_file,

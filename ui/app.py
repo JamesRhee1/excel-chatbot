@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from agent.executor import run
-from core.multi_loader import load_into_workspace, load_multiple_excels
+from core.workspace_loader import load_into_workspace
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
 from core.workspace import Workspace
@@ -219,19 +219,7 @@ def _handle_uploads(uploaded_files: list | None) -> None:
 
     file_results = load_into_workspace(st.session_state.workspace, uploaded_files)
     st.session_state.file_results = file_results
-
-    # Build combined preview for multi mode
-    try:
-        from core.dataset_builder import build_combined_dataset
-        from domains.registry import apply_derived_metrics
-
-        combined = build_combined_dataset(file_results)
-        domain = profile_dataframe(combined).get("domain", "generic")
-        combined = apply_derived_metrics(combined, domain)
-        st.session_state.combined_df = combined
-        st.session_state.last_combined_df = combined
-    except ValueError:
-        st.session_state.combined_df = None
+    st.session_state.combined_df = None
 
 
 def _render_chat_history() -> None:

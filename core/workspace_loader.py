@@ -118,12 +118,3 @@ def load_into_workspace(
                     pass
 
     return results
-
-
-def load_multiple_excels(
-    uploaded_files: list[Any],
-    sheet_name: str | int = 0,
-) -> list[dict]:
-    """Load and profile multiple Excel files; failures are recorded per file."""
-    workspace = Workspace()
-    return load_into_workspace(workspace, uploaded_files, sheet_name=sheet_name)
