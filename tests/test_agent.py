@@ -170,6 +170,18 @@ def test_validate_intent_invalid_agg_func() -> None:
         _validate_intent(intent, profile)
 
 
+def test_validate_intent_rejects_placeholder_column() -> None:
+    from llm.intent import _validate_intent
+
+    intent = {
+        "operations": [{"type": "sort", "column": "<col1>", "ascending": False}],
+        "message": "",
+    }
+    profile = {"column_names": ["매출", "부서"]}
+    with pytest.raises(IntentParseError, match="플레이스홀더"):
+        _validate_intent(intent, profile)
+
+
 # --- parse_intent (mocked chat) ---
 
 
@@ -196,6 +208,21 @@ def test_parse_intent_missing_operations_raises(mock_chat, sample_df: pd.DataFra
     profile = profile_dataframe(sample_df)
     mock_chat.return_value = '{"action": "filter"}'
     result = parse_intent("필터해줘", profile)
+    assert result["operations"][0]["type"] == "clarify"
+
+
+@patch("llm.intent.chat")
+def test_parse_intent_placeholder_column_downgrades_to_clarify(mock_chat, sample_df: pd.DataFrame) -> None:
+    profile = profile_dataframe(sample_df)
+    mock_chat.return_value = json.dumps(
+        {
+            "answer_type": "dataframe",
+            "operations": [{"type": "sort", "column": "<col1>", "ascending": False}],
+            "message": "",
+        },
+        ensure_ascii=False,
+    )
+    result = parse_intent("새로 만든 컬럼 기준으로 정렬", profile)
     assert result["operations"][0]["type"] == "clarify"
 
 

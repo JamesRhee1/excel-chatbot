@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Callable, Literal
 
 from core.operations import normalize_filter_op
@@ -157,6 +158,10 @@ OPERATION_SPECS: tuple[OpSpec, ...] = (
 
 OPERATION_SPEC_BY_TYPE: dict[str, OpSpec] = {spec.type: spec for spec in OPERATION_SPECS}
 SUPPORTED_OPERATION_TYPES = frozenset(OPERATION_SPEC_BY_TYPE)
+_PLACEHOLDER_PATTERN = re.compile(r"^<.*>$")
+_COL_PLACEHOLDER_PATTERN = re.compile(r"^<col\d*>$", re.IGNORECASE)
+_EXPR_PLACEHOLDER_PATTERN = re.compile(r"^<expr>$", re.IGNORECASE)
+_COLUMN_LIKE_FIELDS = ("column", "columns", "group_by", "agg_column", "value_column", "left", "right")
 
 
 class OperationValidationError(ValueError):
@@ -220,6 +225,35 @@ def _validate_optional_pipeline_fields(op: dict, index: int, spec: OpSpec, *, on
             raise on_error(f"operations[{index}] ({spec.type})는 테이블 결과가 없어 save_as를 사용할 수 없습니다.")
 
 
+def _is_placeholder(value: str) -> bool:
+    text = value.strip()
+    return bool(
+        _PLACEHOLDER_PATTERN.match(text)
+        or _COL_PLACEHOLDER_PATTERN.match(text)
+        or _EXPR_PLACEHOLDER_PATTERN.match(text)
+    )
+
+
+def _validate_column_like_placeholders(
+    op: dict,
+    index: int,
+    *,
+    on_error: Callable[[str], Exception],
+) -> None:
+    for field in _COLUMN_LIKE_FIELDS:
+        if field not in op:
+            continue
+        value = op.get(field)
+        if isinstance(value, str) and _is_placeholder(value):
+            raise on_error(f"operations[{index}] ({op.get('type', '?')})의 {field}에 플레이스홀더를 사용할 수 없습니다.")
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and _is_placeholder(item):
+                    raise on_error(
+                        f"operations[{index}] ({op.get('type', '?')})의 {field}에 플레이스홀더를 사용할 수 없습니다."
+                    )
+
+
 def validate_operation(
     op: dict,
     index: int,
@@ -239,6 +273,7 @@ def validate_operation(
     spec = OPERATION_SPEC_BY_TYPE[op_type]
     _require_fields(op, index, spec.required_fields, on_error=error)
     _validate_optional_pipeline_fields(op, index, spec, on_error=error)
+    _validate_column_like_placeholders(op, index, on_error=error)
 
     if spec.require_nonempty_group_by and not op.get("group_by"):
         raise error("group_by가 비어 있습니다. aggregate 대신 top_n을 사용하세요.")
