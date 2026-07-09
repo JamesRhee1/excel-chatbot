@@ -53,6 +53,7 @@ cd excel-chatbot
 | 재시작 | `sudo systemctl restart excel-chatbot` |
 | 중지 | `sudo systemctl stop excel-chatbot` |
 | 트레이스 타이머 | `systemctl status excel-chatbot-trace-cleanup.timer` |
+| 가동 검증 | `bash deploy/smoke_test.sh` |
 
 ### 업데이트
 
