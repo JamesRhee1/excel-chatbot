@@ -26,17 +26,17 @@ Ollama 서비스 유닛 이름(`ollama.service`)이 시스템에 있어야 `exce
 ```bash
 git clone https://github.com/JamesRhee1/excel-chatbot.git
 cd excel-chatbot
-./deploy/install.sh --bind <tailscale-ip>
+./deploy/install.sh --bind 0.0.0.0
 ```
 
-예시:
+예시 (Tailscale로 한정):
 
 ```bash
 ./deploy/install.sh --bind 100.x.y.z
 ```
 
-기본값: `--user` = 현재 사용자, `--dir` = 저장소 루트, `--bind` = `127.0.0.1`.  
-`--bind`에는 Tailscale IP를 넣는 것을 권장합니다 (`0.0.0.0` 금지에 가깝게 운영).
+기본값: `--user` = 현재 사용자, `--dir` = 저장소 루트, `--bind` = `0.0.0.0`.  
+신뢰 가능한 LAN 전제입니다. 외부 공개는 금지하고, 필요 시 Tailscale IP로 바인딩을 한정하세요.
 
 설치 스크립트가 하는 일:
 
@@ -91,7 +91,7 @@ sudo systemctl restart excel-chatbot
 ## 5. 보안 체크리스트
 
 - [ ] `EXCEL_CHATBOT_ENABLE_CODEGEN` **미설정** 유지 (상시 운영 시 codegen 비활성)
-- [ ] `--server.address`를 **Tailscale IP**(또는 `127.0.0.1`)로 한정 — `0.0.0.0` 지양
+- [ ] `--server.address`는 신뢰 LAN의 `0.0.0.0` 또는 **Tailscale IP**로 한정 — 공인 인터넷 노출 금지
 - [ ] `maxUploadSize` 20MB 유지
 - [ ] `traces/` 30일 초과 `traces_*.jsonl` 자동 삭제 타이머 활성 확인
 - [ ] 외부 공개가 필요해지면 Cloudflare Tunnel + Access 등 **별도 인증 계층**을 검토 (이 저장소 범위 밖)

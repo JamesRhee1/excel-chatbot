@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Idempotent installer for excel-chatbot systemd units (Tailscale private network).
+# Idempotent installer for excel-chatbot systemd units (LAN / Tailscale private network).
 # Example:
-#   ./deploy/install.sh --bind 100.x.y.z
-# Use a Tailscale IP for --bind so the app is not exposed on the public interface.
+#   ./deploy/install.sh --bind 0.0.0.0
+# Trusted LAN assumed. Do not expose publicly; bind to a Tailscale IP when needed.
 set -euo pipefail
 
 APP_USER="$(id -un)"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIND_ADDR="127.0.0.1"
+BIND_ADDR="0.0.0.0"
 
 usage() {
   cat <<'USAGE'
@@ -15,8 +15,9 @@ Usage: ./deploy/install.sh [--user USER] [--dir DIR] [--bind ADDR]
 
   --user   systemd service user (default: current user)
   --dir    application directory (default: repository root)
-  --bind   Streamlit --server.address (default: 127.0.0.1)
-           Prefer your Tailscale IP (e.g. 100.x.y.z), not 0.0.0.0
+  --bind   Streamlit --server.address (default: 0.0.0.0)
+           Trusted LAN assumed. Do not expose publicly;
+           use a Tailscale IP (e.g. 100.x.y.z) to limit access when needed.
 
 This script only writes under /etc/systemd/system/ and calls systemctl.
 It does not install Tailscale or Ollama.
