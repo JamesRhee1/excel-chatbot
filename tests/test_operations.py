@@ -72,6 +72,35 @@ def test_filter_rows_string_numeric_value(sample_df: pd.DataFrame) -> None:
     _assert_unchanged(original, sample_df)
 
 
+def test_filter_rows_string_zero(sample_df: pd.DataFrame) -> None:
+    result = filter_rows(sample_df, "매출", ">", "0")
+    assert len(result) == 5
+
+
+def test_filter_rows_currency_string(sample_df: pd.DataFrame) -> None:
+    result = filter_rows(sample_df, "매출", ">=", "1,000,000원")
+    assert len(result) == 0
+    result2 = filter_rows(sample_df, "매출", ">=", "1,000원")
+    assert len(result2) == 4
+
+
+def test_filter_rows_non_numeric_string_raises(sample_df: pd.DataFrame) -> None:
+    with pytest.raises(ValueError, match="숫자로 해석할 수 없습니다"):
+        filter_rows(sample_df, "매출", ">", "abc")
+
+
+def test_filter_rows_ordered_compare_on_text_raises(sample_df: pd.DataFrame) -> None:
+    with pytest.raises(ValueError, match="문자열 컬럼"):
+        filter_rows(sample_df, "부서", ">", "영업")
+
+
+def test_derive_right_numeric_string(sample_df: pd.DataFrame) -> None:
+    from core.operations import derive_column
+
+    result = derive_column(sample_df, "조정", "매출", "subtract", "100")
+    assert result["조정"].tolist() == [900, 2400, 700, 3100, 1400]
+
+
 def test_filter_rows_contains_special_chars(sample_df: pd.DataFrame) -> None:
     original = sample_df.copy()
     df = sample_df.copy()
