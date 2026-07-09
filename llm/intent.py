@@ -41,6 +41,7 @@ Rules:
 - If unsure, return clarify with an honest message that you cannot answer confidently
 - NEVER return empty operations without clarify message
 - filter op: >, <, >=, <=, ==, !=, <>, contains  (<> means not equal)
+- Numeric filter values must be JSON numbers without quotes (e.g. "value": 0, not "0")
 - Use exclude_summary implicitly via planner only when user asks to ignore total rows; executor auto-excludes 합계/소계 rows for ranking/sort/aggregate
 - When user says "직전 결과에서", "여기서", or "이 중에서", set source to "last_result"
 - For ratio/return rate/percent (%) requests, do NOT put formulas in column; plan derive (op="divide" or "percent") then top_n or sort. Example: "수익률이 가장 높은 행" => derive(new_column="수익률", left="이익", op="divide", right="매출") then top_n on "수익률"
