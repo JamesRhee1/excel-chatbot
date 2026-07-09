@@ -24,7 +24,8 @@ def _is_mostly_numeric(series: pd.Series) -> bool:
     return numeric.notna().sum() >= max(1, len(series.dropna()) * 0.5)
 
 
-def _is_id_like_column(name: str) -> bool:
+def is_id_like_column(name: str) -> bool:
+    """Return True when a column name looks like an ID/code/date key, not an amount."""
     lowered = str(name).strip().lower()
     return any(keyword in lowered for keyword in _ID_LIKE_KEYWORDS)
 
@@ -56,7 +57,7 @@ def profile_dataframe(df: pd.DataFrame, domain: str | None = None) -> dict:
     for col in column_names:
         if col in unnamed_columns:
             continue
-        if _is_id_like_column(col):
+        if is_id_like_column(col):
             continue
         if col in numeric_columns or any(kw in col for kw in _AMOUNT_KEYWORDS):
             likely_amount_columns.append(col)

@@ -14,7 +14,7 @@ from agent.tools import apply_operation
 from core.dataset_builder import build_combined_dataset
 from core.table_operations import build_multi_file_summary
 from core.op_spec import OPERATION_SPEC_BY_TYPE, PipelineValidationError, validate_pipeline
-from core.profiler import _ID_LIKE_KEYWORDS, profile_dataframe
+from core.profiler import is_id_like_column, profile_dataframe
 from core.reader import load_excel_with_domain
 from core.sandbox_runner import CODEGEN_WARNING, SandboxError, is_codegen_enabled, run_sandbox
 from core.workspace import LAST_RESULT_TABLE, Workspace
@@ -59,11 +59,6 @@ def _apply_context_source(intent: dict, user_message: str) -> dict:
     return intent
 
 
-def _is_id_like_column(name: str) -> bool:
-    lowered = str(name).strip().lower()
-    return any(keyword in lowered for keyword in _ID_LIKE_KEYWORDS)
-
-
 def _contains_column_hint(user_message: str, column: str) -> bool:
     msg = user_message.replace(" ", "")
     col = str(column).replace(" ", "")
@@ -80,7 +75,7 @@ def _pick_auto_rank_column(df: pd.DataFrame, profile: dict, workspace: Workspace
         return likely_amount[0]
 
     for col in profile.get("numeric_columns") or []:
-        if col in df.columns and not _is_id_like_column(col):
+        if col in df.columns and not is_id_like_column(col):
             return str(col)
     return None
 
@@ -99,7 +94,7 @@ def _resolve_ranking_column(
     if not needs_auto:
         needs_auto = not isinstance(raw_column, str) or not raw_column.strip()
     if not needs_auto and isinstance(raw_column, str):
-        needs_auto = _is_id_like_column(raw_column) and not _contains_column_hint(user_message, raw_column)
+        needs_auto = is_id_like_column(raw_column) and not _contains_column_hint(user_message, raw_column)
 
     if not needs_auto:
         return op
