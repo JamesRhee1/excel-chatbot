@@ -94,6 +94,33 @@ def _require_columns(df: pd.DataFrame, columns: list[str]) -> None:
     raise KeyError(missing)
 
 
+def _is_numeric_column(series: pd.Series) -> bool:
+    if pd.api.types.is_numeric_dtype(series):
+        return True
+    non_null = int(series.notna().sum())
+    if non_null == 0:
+        return False
+    coerced = _coerce_numeric_series(series)
+    return int(coerced.notna().sum()) >= max(1, int(non_null * 0.5))
+
+
+def _parse_numeric_literal(value) -> float:
+    """Parse a scalar into float; strip commas, currency markers, and spaces."""
+    if isinstance(value, bool):
+        raise ValueError(f"숫자로 해석할 수 없습니다: {value!r}")
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            raise ValueError(f"숫자로 해석할 수 없습니다: {value!r}")
+        return float(value)
+    text = str(value).strip()
+    for token in (",", "원", "₩", "$", "€", " "):
+        text = text.replace(token, "")
+    text = text.strip()
+    if not text:
+        raise ValueError(f"숫자로 해석할 수 없습니다: {value!r}")
+    return float(text)
+
+
 def _coerce_numeric_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
         return series
@@ -101,22 +128,22 @@ def _coerce_numeric_series(series: pd.Series) -> pd.Series:
         series.astype(str)
         .str.replace(",", "", regex=False)
         .str.replace("원", "", regex=False)
+        .str.replace("₩", "", regex=False)
+        .str.replace("$", "", regex=False)
         .str.strip()
     )
     return pd.to_numeric(cleaned, errors="coerce")
 
 
-def _coerce_filter_value(series: pd.Series, value):
-    series_num = _coerce_numeric_series(series)
-    if pd.api.types.is_numeric_dtype(series_num) and series_num.notna().any():
-        if isinstance(value, str):
-            stripped = value.strip().replace(",", "")
-            try:
-                return float(stripped) if "." in stripped else int(stripped)
-            except ValueError:
-                pass
+def _coerce_filter_value(column: str, series: pd.Series, value, *, require_numeric: bool):
+    if not require_numeric:
         return value
-    return value
+    try:
+        return _parse_numeric_literal(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"'{column}'은 숫자 컬럼입니다. '{value}'은 숫자로 해석할 수 없습니다."
+        ) from exc
 
 
 def _format_amount(val) -> str:
@@ -140,12 +167,17 @@ def filter_rows(df: pd.DataFrame, column: str, op: str, value) -> pd.DataFrame:
         raise ValueError(f"Unsupported operator: {op!r}. Must be one of {_VALID_OPS}")
     _require_columns(df, [column])
     series = df[column]
+    numeric_col = _is_numeric_column(series)
 
     if op == "contains":
         mask = series.astype(str).str.contains(str(value), na=False, regex=False)
     elif op in {">", "<", ">=", "<="}:
+        if not numeric_col:
+            raise ValueError(
+                f"'{column}'은 문자열 컬럼입니다. '{op}' 비교는 숫자 컬럼에만 사용할 수 있습니다."
+            )
         numeric = _coerce_numeric_series(series)
-        cmp_val = _coerce_filter_value(series, value)
+        cmp_val = _coerce_filter_value(column, series, value, require_numeric=True)
         if op == ">":
             mask = numeric > cmp_val
         elif op == "<":
@@ -155,9 +187,9 @@ def filter_rows(df: pd.DataFrame, column: str, op: str, value) -> pd.DataFrame:
         else:
             mask = numeric <= cmp_val
     else:
-        numeric = _coerce_numeric_series(series)
-        if numeric.notna().sum() >= max(1, series.notna().sum() * 0.5):
-            cmp_val = _coerce_filter_value(series, value)
+        if numeric_col:
+            numeric = _coerce_numeric_series(series)
+            cmp_val = _coerce_filter_value(column, series, value, require_numeric=True)
             mask = numeric == cmp_val if op == "==" else numeric != cmp_val
         else:
             cmp_val = str(value)
@@ -292,8 +324,17 @@ def derive_column(
         right = pd.Series(float(right_col), index=result.index)
     else:
         right_name = str(right_col)
-        _require_columns(result, [right_name])
-        right = _coerce_numeric_series(result[right_name])
+        if right_name in result.columns:
+            _require_columns(result, [right_name])
+            right = _coerce_numeric_series(result[right_name])
+        else:
+            try:
+                literal = _parse_numeric_literal(right_name)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"derive right '{right_name}'은 숫자로 해석할 수 없습니다."
+                ) from exc
+            right = pd.Series(literal, index=result.index)
 
     if op == "add":
         result[new_column] = left + right
