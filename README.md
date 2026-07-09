@@ -179,6 +179,7 @@ excel-chatbot/
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 계층 설계, 실행 흐름, 설계 결정 근거, escape hatch 격리 설계 |
 | [docs/EVALUATION.md](docs/EVALUATION.md) | 평가 하네스 사용법, 지표 정의, 골든 질의셋 스키마 |
 | [docs/EXTENDING.md](docs/EXTENDING.md) | 새 연산·새 도메인 팩 추가 가이드 |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Tailscale + systemd 상시 운영 설치·보안·트러블슈팅 |
 
 ## 라이선스
 
