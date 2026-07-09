@@ -1,0 +1,8 @@
+[Unit]
+Description=Excel Chatbot trace cleanup (delete traces older than 30 days)
+
+[Service]
+Type=oneshot
+User=%APP_USER%
+WorkingDirectory=%APP_DIR%
+ExecStart=/usr/bin/find %APP_DIR%/traces -type f -name 'traces_*.jsonl' -mtime +30 -delete

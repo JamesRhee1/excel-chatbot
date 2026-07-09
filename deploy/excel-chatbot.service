@@ -1,0 +1,27 @@
+[Unit]
+Description=Excel Chatbot (Streamlit)
+After=network-online.target ollama.service
+Wants=network-online.target
+Requires=ollama.service
+
+[Service]
+Type=simple
+User=%APP_USER%
+WorkingDirectory=%APP_DIR%
+Environment=OLLAMA_MODEL=qwen2.5:7b
+Environment=EXCEL_CHATBOT_TRACE_DIR=%APP_DIR%/traces
+# 보안: EXCEL_CHATBOT_ENABLE_CODEGEN은 의도적으로 미설정 (상시 운영 시 비활성)
+ExecStart=%APP_DIR%/.venv/bin/streamlit run ui/app.py \
+    --server.port 8501 \
+    --server.address %BIND_ADDR% \
+    --server.maxUploadSize 20 \
+    --server.headless true \
+    --browser.gatherUsageStats false
+Restart=always
+RestartSec=5
+MemoryMax=4G
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
