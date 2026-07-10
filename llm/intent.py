@@ -64,6 +64,18 @@ def clarify_message(profile: dict | None = None) -> str:
     return "\n".join(lines)
 
 
+def demo_mode_llm_message(profile: dict) -> str:
+    examples = list(profile.get("domain_example_queries", [])[:2])
+    if len(examples) < 2:
+        fallback = ["가장 높은 행 찾아줘", "매출 상위 5개"]
+        examples.extend(fallback[: 2 - len(examples)])
+    example_text = ", ".join(f"'{q}'" for q in examples[:2])
+    return (
+        "이 질문은 LLM 해석이 필요합니다. 데모 환경에서는 정형 질의만 지원됩니다. "
+        f"예: {example_text}"
+    )
+
+
 UNKNOWN_MESSAGE = clarify_message()
 _CLARIFY_FALLBACK = UNKNOWN_MESSAGE
 

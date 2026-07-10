@@ -23,7 +23,8 @@ from core.verification import verify_operation
 from core.writer import save_excel
 from domains.registry import apply_derived_metrics
 from llm.client import OllamaConnectionError, OllamaModelNotFoundError
-from llm.intent import IntentParseError, parse_intent
+from llm.intent import IntentParseError, demo_mode_llm_message, parse_intent
+from llm.providers import get_provider, is_llm_available
 
 DEFAULT_MAIN_TABLE = "main"
 DEFAULT_COMBINED_TABLE = "combined"
@@ -163,6 +164,7 @@ def _emit_run_trace(
     input_columns: list[str],
     output_rows: int | None,
     output_columns: list[str],
+    llm_provider: str | None = None,
 ) -> None:
     total_ms = (time.perf_counter() - started) * 1000
     _TRACE_WRITER.write(
@@ -182,6 +184,7 @@ def _emit_run_trace(
             input_columns=input_columns,
             output_rows=output_rows,
             output_columns=output_columns,
+            llm_provider=llm_provider,
         )
     )
 
@@ -254,6 +257,7 @@ def run(
     output_rows: int | None = None
     output_columns: list[str] = []
     result: dict | None = None
+    llm_provider_name: str | None = None
 
     profile: dict = {}
     ws = workspace or Workspace()
@@ -315,7 +319,18 @@ def run(
                 if any(hint in user_message for hint in _CONTEXT_SOURCE_HINTS):
                     default_table = llm_source_name
                 profile = llm_profile
-                intent = parse_intent(user_message, llm_profile, model=model)
+                if not is_llm_available():
+                    route_path = "llm"
+                    demo_message = demo_mode_llm_message(llm_profile)
+                    intent = {
+                        "answer_type": "message",
+                        "operations": [{"type": "clarify", "message": demo_message}],
+                    }
+                    llm_provider_name = None
+                else:
+                    intent = parse_intent(user_message, llm_profile, model=model)
+                    active = get_provider()
+                    llm_provider_name = active.name if active else None
             if not approved_codegen_code:
                 intent = prepend_exclude_summary(intent, user_message, profile)
                 intent = _apply_context_source(intent, user_message)
@@ -388,6 +403,8 @@ def run(
                 generated_code = generate_pandas_code(user_message, profile, model=model)
                 if generated_code:
                     route_path = "llm"
+                    active = get_provider()
+                    llm_provider_name = active.name if active else llm_provider_name
                     operations_applied = [{"type": "codegen_proposal"}]
                     intent = {
                         "answer_type": "codegen_pending",
@@ -569,7 +586,9 @@ def run(
         input_columns=input_columns,
         output_rows=output_rows,
         output_columns=output_columns,
+        llm_provider=llm_provider_name,
     )
+    result["llm_provider"] = llm_provider_name
     return _attach_trace_id(result, trace_id, route_path=route_path)
 
 

@@ -15,6 +15,7 @@ from core.workspace_loader import load_into_workspace
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
 from core.workspace import Workspace
+from llm.providers import is_llm_available
 
 MODEL_OPTIONS = [
     "qwen2.5:7b",
@@ -440,6 +441,12 @@ def main() -> None:
     _inject_secrets_to_env()
     st.title("📊 Excel 분석 챗봇")
     st.caption("숫자는 pandas가 계산하고, LLM이 결과를 설명합니다.")
+
+    if not is_llm_available():
+        st.info(
+            "데모 모드 — 정형 질의(순위·정렬·필터·집계·파생계산)는 동작하며, "
+            "복합 자연어 해석(LLM)은 이 환경에서 비활성입니다."
+        )
 
     _init_session_state()
 

@@ -32,6 +32,7 @@ class TraceRecord:
     input_columns: list[str] = field(default_factory=list)
     output_rows: int | None = None
     output_columns: list[str] = field(default_factory=list)
+    llm_provider: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
