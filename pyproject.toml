@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ollama = ["ollama>=0.3.0"]
+cloud = ["google-generativeai>=0.8"]
 dev = [
     "pytest>=7.0.0",
     "pyyaml>=6.0.0",

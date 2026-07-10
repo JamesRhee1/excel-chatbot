@@ -1,2 +1,1 @@
-# Install with: pip install -e ".[dev,ollama]"
--e ".[dev]"
+-e ".[dev,cloud]"
