@@ -1,4 +1,4 @@
-"""Ollama client — thin wrapper around the Ollama chat API."""
+"""LLM client — delegates to the active provider (Ollama or Gemini)."""
 
 from __future__ import annotations
 
@@ -23,11 +23,12 @@ def chat(
     model: str | None = None,
 ) -> str:
     """Send a chat request expecting JSON-formatted output."""
-    resolved_model = model or DEFAULT_MODEL
-    try:
-        return _chat_via_ollama_lib(system_prompt, user_message, resolved_model)
-    except ImportError:
-        return _chat_via_requests(system_prompt, user_message, resolved_model)
+    from llm.providers import get_provider
+
+    provider = get_provider()
+    if provider is None:
+        raise OllamaConnectionError("LLM 프로바이더를 사용할 수 없습니다.")
+    return provider.chat_json(system_prompt, user_message, model=model)
 
 
 def chat_plain(
@@ -36,11 +37,12 @@ def chat_plain(
     model: str | None = None,
 ) -> str:
     """Send a chat request expecting plain-text output."""
-    resolved_model = model or DEFAULT_MODEL
-    try:
-        return _chat_plain_via_ollama_lib(system_prompt, user_message, resolved_model)
-    except ImportError:
-        return _chat_plain_via_requests(system_prompt, user_message, resolved_model)
+    from llm.providers import get_provider
+
+    provider = get_provider()
+    if provider is None:
+        raise OllamaConnectionError("LLM 프로바이더를 사용할 수 없습니다.")
+    return provider.chat_plain(system_prompt, user_message, model=model)
 
 
 def _chat_plain_via_ollama_lib(system_prompt: str, user_message: str, model: str) -> str:

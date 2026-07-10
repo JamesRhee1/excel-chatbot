@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 from pathlib import Path
 
@@ -24,6 +25,16 @@ MODEL_OPTIONS = [
 ]
 
 APP_VERSION = "2026-07-02-multi-file"
+
+
+def _inject_secrets_to_env() -> None:
+    """Mirror Streamlit secrets into os.environ for the llm layer (no streamlit in llm/)."""
+    try:
+        gemini_key = st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        return
+    if gemini_key and not os.environ.get("GEMINI_API_KEY"):
+        os.environ["GEMINI_API_KEY"] = str(gemini_key)
 
 
 def _init_session_state() -> None:
@@ -426,6 +437,7 @@ def _render_download_buttons() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Excel Chatbot", page_icon="📊", layout="wide")
+    _inject_secrets_to_env()
     st.title("📊 Excel 분석 챗봇")
     st.caption("숫자는 pandas가 계산하고, LLM이 결과를 설명합니다.")
 
