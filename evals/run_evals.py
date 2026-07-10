@@ -159,6 +159,11 @@ def _aggregate(results: list[dict]) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Golden-query evaluation harness")
     parser.add_argument("--no-llm", action="store_true", help="Skip queries that require the LLM route")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero unless every active query passes all checks at 100%",
+    )
     parser.add_argument("--golden", type=Path, default=GOLDEN_PATH, help="Path to golden_queries.yaml")
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON output path")
     args = parser.parse_args(argv)
@@ -200,7 +205,26 @@ def main(argv: list[str] | None = None) -> int:
         if not r.get("skipped")
         and not all([r.get("route_ok"), r.get("ops_ok"), r.get("answer_ok"), r.get("verification_ok")])
     ]
-    return 1 if failed else 0
+    exit_code = 1 if failed else 0
+    if args.strict and exit_code == 0:
+        active = [r for r in results if not r.get("skipped")]
+        if args.no_llm:
+            expected_rule = sum(1 for item in items if item.get("expected_route") == "rule")
+            if len(active) != expected_rule:
+                print(
+                    f"STRICT 실패: 규칙 경로 {expected_rule}건 기대, 실제 실행 {len(active)}건",
+                    file=sys.stderr,
+                )
+                exit_code = 1
+        if exit_code == 0 and (
+            summary["route_accuracy"] < 1.0
+            or summary["ops_accuracy"] < 1.0
+            or summary["answer_accuracy"] < 1.0
+            or summary["verification_pass_rate"] < 1.0
+        ):
+            print("STRICT 실패: 일부 지표가 100%가 아닙니다.", file=sys.stderr)
+            exit_code = 1
+    return exit_code
 
 
 if __name__ == "__main__":
