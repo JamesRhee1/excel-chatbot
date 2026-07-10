@@ -1,41 +1,179 @@
-# Excel Chatbot — 로컬 LLM 기반 Excel 분석 챗봇
+# Excel Chatbot — 로컬·클라우드 LLM 기반 Excel 분석 챗봇
 
-Ollama 로컬 LLM으로 Excel 파일을 자연어로 분석하는 Streamlit 챗봇입니다.
-LLM은 **계획만 세우고, 모든 계산은 검증된 pandas 함수가 수행**하며,
-모든 연산 결과는 불변식 검사를 거쳐 검증 배지와 함께 반환됩니다.
+Ollama(로컬) 또는 Gemini(클라우드)로 Excel 파일을 자연어로 분석하는 Streamlit 챗봇입니다.
+LLM은 **계획(JSON)만 생성**하고, 모든 계산은 `core/operations.py`의 검증된 pandas 함수가 수행합니다.
+
+[![CI](https://github.com/JamesRhee1/excel-chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/JamesRhee1/excel-chatbot/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Streamlit](https://img.shields.io/badge/Streamlit-UI-red)
+
+공개 데모: 준비 중
 
 ## 핵심 원칙
 
 > **숫자는 코드가, 말은 LLM이.**
 
-LLM의 역할은 사용자 의도를 구조화된 JSON 명령(operation 파이프라인)으로
-변환하는 것까지입니다. 실제 데이터 조작·계산은 폐쇄된 연산 집합의
-순수 함수가 수행하므로, **환각으로 인한 수치 오염이 구조적으로 불가능**합니다.
+LLM의 역할은 사용자 의도를 구조화된 JSON 명령(operation 파이프라인)으로 변환하는 것까지입니다.
+실제 데이터 조작·계산은 폐쇄 연산 집합의 순수 함수가 수행하므로, 환각으로 인한 수치 오염이 구조적으로 차단됩니다.
 
-이 원칙 위에 세 가지 신뢰성 장치가 더해져 있습니다.
+## 계층 아키텍처
 
-| 장치 | 역할 |
+```
+domains → core → llm → agent → ui
+```
+
+```mermaid
+graph TB
+    subgraph ui["ui/"]
+        app["app.py"]
+    end
+    subgraph agent["agent/"]
+        executor["executor.py"]
+        router["router.py"]
+        tools["tools.py"]
+        formatter["response_formatter.py"]
+    end
+    subgraph llm["llm/"]
+        providers["providers.py"]
+        intent["intent.py"]
+        codegen["codegen.py"]
+        client["client.py"]
+    end
+    subgraph core["core/"]
+        opspec["op_spec.py"]
+        operations["operations.py"]
+        workspace["workspace.py"]
+        verification["verification.py"]
+        trace["trace.py"]
+    end
+    subgraph domains["domains/"]
+        registry["registry.py"]
+        budget["budget_comparison.py"]
+        generic["generic.py"]
+    end
+    app --> executor
+    executor --> router
+    executor --> tools
+    executor --> intent
+    executor --> trace
+    tools --> operations
+    tools --> opspec
+    intent --> client
+    client --> providers
+    codegen --> client
+    executor --> registry
+    registry --> budget
+    registry --> generic
+    operations --> workspace
+    executor --> verification
+```
+
+## 요청 처리 흐름
+
+```mermaid
+sequenceDiagram
+    participant U as 사용자
+    participant UI as ui/app.py
+    participant E as agent/executor
+    participant R as agent/router
+    participant P as llm/providers
+    participant L as llm/intent
+    participant V as core/op_spec
+    participant X as agent/tools
+    participant C as core/operations
+    participant K as core/verification
+    participant T as core/trace
+
+    U->>UI: 자연어 질문
+    UI->>E: run()
+    E->>R: route_query()
+    alt 규칙 경로 적중
+        R-->>E: intent (operations)
+        Note over E: route_path=rule
+    else 규칙 미적중
+        E->>P: get_provider()
+        alt 프로바이더 없음
+            P-->>E: None (데모 모드)
+            E-->>E: clarify 안내 (LLM 미호출)
+        else Ollama / Gemini
+            P-->>E: provider
+            E->>L: parse_intent()
+            L->>P: chat_json()
+            P-->>L: JSON
+            L-->>E: intent
+        end
+        Note over E: route_path=llm
+    end
+    E->>V: validate_pipeline()
+    E->>X: apply_operation() × N
+    X->>C: 순수 pandas 연산
+    C-->>X: DataFrame
+    X->>K: verify_operation()
+    K-->>E: VerificationReport
+    E->>T: TraceRecord (llm_provider 포함)
+    E-->>UI: success/error + 검증 배지
+    UI-->>U: 응답
+```
+
+## 배포 토폴로지
+
+```mermaid
+graph LR
+    subgraph local["로컬 (systemd + Ollama)"]
+        SVC["excel-chatbot.service"]
+        OLL["Ollama :11434"]
+        SVC --> OLL
+        SVC --> P1["get_provider()"]
+        P1 -->|가용| O1["OllamaProvider"]
+    end
+    subgraph cloud["Streamlit Community Cloud"]
+        ST["share.streamlit.io"]
+        ST --> P2["get_provider()"]
+        P2 -->|키 있음| G1["GeminiProvider"]
+        P2 -->|키 없음| D1["데모 모드<br/>정형 질의만"]
+    end
+    U1["사용자 (Tailscale/LAN)"] --> SVC
+    U2["사용자 (공개 URL)"] --> ST
+```
+
+## LLM 프로바이더
+
+선택 로직 (`llm/providers.py`의 `get_provider()`):
+
+1. `EXCEL_CHATBOT_LLM_PROVIDER=ollama|gemini` → 해당 프로바이더 강제
+2. 미지정 시: Ollama `/api/tags` 헬스체크(2초) 통과 → Ollama
+3. Ollama 불가 + `GEMINI_API_KEY` 존재 → Gemini
+4. 둘 다 아니면 `None` → **데모 모드** (정형 규칙 질의만, LLM 비활성)
+
+결과는 60초 캐시되며, 실패 후 60초 뒤 재확인합니다.
+
+| 환경 | LLM 백엔드 | 동작 |
+|---|---|---|
+| 로컬 (Ollama 실행 중) | Ollama | 전체 기능 (규칙 + LLM intent) |
+| Streamlit Cloud (`GEMINI_API_KEY` 설정) | Gemini | 전체 기능 (규칙 + LLM intent) |
+| 키 없음 / Ollama 다운 | 없음 (데모) | 정형 질의(순위·정렬·필터·집계·파생계산)만 |
+
+## 신뢰성 장치
+
+| 장치 | 수치·구성 |
 |---|---|
-| 검증 계층 | 모든 연산 결과에 op별 불변식 검사 (행수 보존, 합계 재대사 등) — 응답에 `✓ 검증됨` 배지 표시 |
-| 실행 트레이스 | 질문 1건당 라우팅 경로·연산·소요시간·검증 결과를 JSONL 1줄로 기록 |
-| 평가 하네스 | 골든 질의 20개로 라우팅 적중률·연산 일치율·답변 정확도를 회귀 측정 |
+| 단위·통합 테스트 | **194**건 (`pytest`, integration 1건 제외) |
+| 골든 질의 eval | **28**건 (규칙 **16** / LLM **12**) |
+| CI 규칙 경로 | `run_evals.py --no-llm --strict` → 16건 100% 필수 |
+| 배포 smoke test | `deploy/smoke_test.sh` **11**항목 (서비스·HTTP·E2E·트레이스) |
+| 검증 계층 | table-output 연산마다 op별 불변식 (`core/verification.py`) |
+| 실행 트레이스 | 질문 1건당 JSONL 1줄 (`llm_provider` 필드 포함) |
 
 ## 기능
 
-- **단일/다중 파일 분석** — 파일 여러 개를 올리면 Workspace에 named table로
-  등록되어 통합·비교 질의 가능 (`"파일별 당년도예산 합계 비교해줘"`)
-- **rule-first 라우팅** — 정형 패턴은 LLM 호출 없이 즉시 처리, 그 외에만
-  LLM intent 파싱으로 폴백
-- **도메인 팩** — 예실대비표(2행 헤더) 자동 감지·정규화. 일반 표는 generic
-  팩으로 처리되며, 새 문서 양식은 팩 추가만으로 지원 가능
-- **파생 컬럼 계산** — `"예산잔액에서 가집행금액 뺀 값 컬럼 만들어줘"` →
-  add / subtract / multiply / divide / percent / abs_diff
-- **대화 체이닝** — `"이 중에서 상위 3개"`처럼 직전 결과(`last_result`)를
-  이어서 분석
-- **컬럼명 유연 해석** — `"당해예산"` → `당년도예산` 자동 매핑 (동의어 사전 +
-  fuzzy 매칭)
-- **(선택) 코드 실행 escape hatch** — 폐쇄 연산으로 표현 불가한 요청에 한해,
-  플래그 활성 + 사용자 승인 시 서브프로세스 격리 환경에서 LLM 생성 코드 실행
+- **단일/다중 파일 분석** — Workspace named table, 통합·비교 질의
+- **rule-first 라우팅** — 정형 패턴은 LLM 없이 즉시 처리
+- **프로바이더 계층** — Ollama 우선 → Gemini 폴백 → 데모 강등
+- **도메인 팩** — 예실대비표 자동 감지·정규화 (`budget_comparison` / `generic`)
+- **파생 컬럼** — add / subtract / multiply / divide / percent / abs_diff
+- **대화 체이닝** — `last_result` 기반 후속 질의
+- **(선택) 코드 실행 escape hatch** — `EXCEL_CHATBOT_ENABLE_CODEGEN=1` + 사용자 승인
 
 ## 빠른 시작
 
@@ -44,15 +182,13 @@ git clone https://github.com/JamesRhee1/excel-chatbot.git
 cd excel-chatbot
 pip install -e ".[dev]"
 
-# Ollama 준비 (로컬)
 ollama pull qwen2.5:7b
 ollama serve
 
-# 앱 실행
 streamlit run ui/app.py
 ```
 
-브라우저에서 http://localhost:8501 접속 후 xlsx 파일을 업로드하고 질문합니다.
+브라우저: http://localhost:8501
 
 **예시 질문**
 
@@ -63,123 +199,100 @@ streamlit run ui/app.py
 비목분류별 당년도예산 합계 보여줘
 예산잔액에서 가집행금액 뺀 값 컬럼 만들어줘
 이 중에서 상위 3개만 보여줘
-파일별 집행률 비교해줘        # 다중 파일 업로드 시
+파일별 집행률 비교해줘
 ```
 
 ## 환경변수
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `OLLAMA_MODEL` | `qwen2.5:7b` | intent 파싱에 사용할 Ollama 모델 |
-| `EXCEL_CHATBOT_TRACE_DIR` | `./traces/` | JSONL 실행 트레이스 기록 경로 |
-| `EXCEL_CHATBOT_ENABLE_CODEGEN` | (미설정) | `1`일 때만 코드 실행 escape hatch 활성. 미설정 시 해당 요청은 clarify로 안내 |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | Ollama intent 파싱 모델 |
+| `EXCEL_CHATBOT_LLM_PROVIDER` | (미설정) | `ollama` 또는 `gemini`로 프로바이더 강제 |
+| `GEMINI_API_KEY` | (미설정) | Gemini API 키 (클라우드·폴백) |
+| `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini 모델명 |
+| `EXCEL_CHATBOT_TRACE_DIR` | `./traces/` | JSONL 트레이스 경로 |
+| `EXCEL_CHATBOT_ENABLE_CODEGEN` | (미설정) | `1`일 때만 코드 실행 escape hatch 활성 |
 
-## 아키텍처 개요
+Streamlit Cloud에서는 `GEMINI_API_KEY`를 Secrets에 설정하면 `ui/app.py`가 시작 시 `os.environ`에 주입합니다.
 
-```
-domains → core → llm → agent → ui
-```
+## 지원 연산 (20종)
 
-```mermaid
-graph LR
-    U[사용자 질문] --> R{규칙 라우터}
-    R -- 패턴 적중 --> P[operation 파이프라인]
-    R -- 미적중 --> L[LLM intent 파싱<br/>Ollama, JSON only]
-    L --> V0[스키마 검증<br/>op_spec 레지스트리]
-    V0 --> P
-    P --> E[Workspace executor<br/>순수 pandas 함수]
-    E --> V[검증 계층<br/>op별 불변식 검사]
-    V --> A[응답 + 검증 배지]
-    E -.-> T[JSONL 트레이스]
-```
+`core/op_spec.py`의 `OPERATION_SPECS` 단일 정의:
 
-- `domains/` — 문서 양식별 감지·정규화·어휘 (예실대비표 / generic)
-- `core/` — 순수 DataFrame 연산, Workspace, op 레지스트리, 검증, 트레이스, 샌드박스
-- `llm/` — Ollama 클라이언트 + intent/codegen 프롬프트 (agent 무의존)
-- `agent/` — 라우팅·오케스트레이션·응답 포맷팅
-- `ui/` — Streamlit (단일 진입점 `agent.executor.run`만 호출)
-
-상세 설계는 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고하세요.
-
-## 지원 연산 (폐쇄 집합)
-
-LLM이 계획에 사용할 수 있는 연산은 `core/op_spec.py`에 단일 정의되어
-있으며, 스키마 검증·디스패치·LLM 프롬프트 예시가 모두 이 레지스트리에서
-파생됩니다.
-
-`filter` · `sort` · `select` · `aggregate` · `top_n` · `lookup` ·
-`value_answer` · `summary_stats` · `derive` · `exclude_summary` ·
-`filter_row_type` · `describe_dataset` · `help` · `clarify` ·
-`combine_dataset` · `summarize_by_file` · `compare_item_across_files` ·
-`top_n_by_file` · `top_n_overall` · `multi_summary`
-
-각 연산은 입출력 타입(`table`/`scalar`/`message`)이 선언되어 있고,
-실행 전에 `validate_pipeline()`이 source 테이블 존재 여부와 타입 호환성을
-검사합니다. `save_as`로 중간 결과를 Workspace에 저장해 후속 질의에서
-재사용할 수 있습니다.
+`aggregate` · `clarify` · `combine_dataset` · `compare_item_across_files` ·
+`derive` · `describe_dataset` · `exclude_summary` · `filter` · `filter_row_type` ·
+`help` · `lookup` · `multi_summary` · `select` · `sort` · `summary_stats` ·
+`summarize_by_file` · `top_n` · `top_n_by_file` · `top_n_overall` · `value_answer`
 
 ## 평가
 
 ```bash
-python evals/run_evals.py --no-llm   # 규칙 경로만, Ollama 불필요 (CI용)
-python evals/run_evals.py            # 전체 20개 (Ollama 필요)
+python evals/run_evals.py --no-llm --strict   # 규칙 16건, CI와 동일
+python evals/run_evals.py                     # 전체 28건 (LLM 필요)
 ```
-
-골든 질의 20개(규칙 경로 12 / LLM 경로 8)에 대해 라우팅 적중률·연산 시퀀스
-일치율·답변 정확도·검증 통과율을 집계합니다. 현재 규칙 경로 기준 4개 지표
-모두 100%입니다. 상세는 [docs/EVALUATION.md](docs/EVALUATION.md) 참고.
 
 ## 테스트
 
 ```bash
-pytest                       # 160+ 케이스 (Ollama 불필요)
-pytest -m integration        # Ollama 연동 테스트 (로컬 서버 필요)
+pytest                       # 194건 (integration 1건 제외)
+pytest -m integration        # Ollama 연동 (로컬 서버 필요)
 ```
 
 ## 프로젝트 구조
 
 ```
 excel-chatbot/
-├── domains/                    # 도메인 팩 (최하위 계층)
-│   ├── base.py                 #   DomainPack 인터페이스
-│   ├── budget_comparison.py    #   예실대비표 팩 (감지·정규화·동의어·파생지표)
-│   ├── generic.py              #   폴백 팩
-│   └── registry.py             #   팩 매칭·프로파일 보강
+├── .github/workflows/ci.yml
+├── .streamlit/config.toml
+├── deploy/
+│   ├── excel-chatbot.service
+│   ├── excel-chatbot-trace-cleanup.service
+│   ├── excel-chatbot-trace-cleanup.timer
+│   ├── install.sh
+│   └── smoke_test.sh
+├── domains/
+│   ├── base.py
+│   ├── budget_comparison.py
+│   ├── generic.py
+│   └── registry.py
 ├── core/
-│   ├── op_spec.py              # 연산 스키마 단일 출처 + validate_pipeline
-│   ├── operations.py           # 순수 DataFrame 연산 (filter/sort/derive/...)
-│   ├── table_operations.py     # 다중 테이블 연산 (비교/파일별 집계)
-│   ├── dataset_builder.py      # 다중 파일 통합 DataFrame 구성
-│   ├── workspace.py            # named table 컨테이너 (last_result 포함)
-│   ├── workspace_loader.py     # 파일 → Workspace 적재
-│   ├── verification.py         # op별 불변식 검사
-│   ├── trace.py                # JSONL 실행 트레이스
-│   ├── sandbox_runner.py       # escape hatch (subprocess -I 격리)
-│   ├── sandbox_child.py        #   자식 프로세스 (setrlimit 메모리 상한)
-│   ├── reader.py / writer.py / profiler.py / column_resolver.py
-│   └── budget_table_normalizer.py
+│   ├── op_spec.py
+│   ├── operations.py
+│   ├── table_operations.py
+│   ├── dataset_builder.py
+│   ├── workspace.py
+│   ├── workspace_loader.py
+│   ├── verification.py
+│   ├── trace.py
+│   ├── sandbox_runner.py
+│   ├── sandbox_child.py
+│   └── reader.py / writer.py / profiler.py / column_resolver.py
 ├── llm/
-│   ├── client.py               # Ollama 래퍼
-│   ├── intent.py               # 자연어 → operation JSON
-│   └── codegen.py              # escape hatch용 코드 생성 프롬프트
+│   ├── providers.py          # Ollama / Gemini 선택
+│   ├── client.py
+│   ├── intent.py
+│   └── codegen.py
 ├── agent/
-│   ├── executor.py             # run() 단일 진입점
-│   ├── router.py               # 규칙 기반 라우팅 (LLM 선행)
-│   ├── tools.py                # op 디스패치
+│   ├── executor.py
+│   ├── router.py
+│   ├── tools.py
 │   └── response_formatter.py / presentation.py / intent_utils.py
-├── ui/app.py                   # Streamlit
-├── evals/                      # 골든 질의셋 + 실행기 + 합성 픽스처
-└── tests/                      # 16개 파일, 160+ 케이스
+├── ui/app.py
+├── evals/
+│   ├── golden_queries.yaml
+│   ├── run_evals.py
+│   └── fixtures/
+└── tests/                    # 18개 파일, 194 케이스
 ```
 
 ## 문서
 
 | 문서 | 내용 |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 계층 설계, 실행 흐름, 설계 결정 근거, escape hatch 격리 설계 |
-| [docs/EVALUATION.md](docs/EVALUATION.md) | 평가 하네스 사용법, 지표 정의, 골든 질의셋 스키마 |
-| [docs/EXTENDING.md](docs/EXTENDING.md) | 새 연산·새 도메인 팩 추가 가이드 |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Tailscale + systemd 상시 운영 설치·보안·트러블슈팅 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 계층 설계, 프로바이더 선택, 실행 흐름, 설계 결정 |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | 평가 하네스, 지표, 골든 질의 스키마 |
+| [docs/EXTENDING.md](docs/EXTENDING.md) | 새 연산·도메인 팩 추가 |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | systemd 로컬 운영 + Streamlit Cloud 공개 데모 |
 
 ## 라이선스
 
