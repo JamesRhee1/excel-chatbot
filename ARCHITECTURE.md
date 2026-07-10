@@ -25,7 +25,7 @@ domains → core → llm → agent → ui
 |---|---|---|
 | `domains/` | 문서 양식 감지·정규화·어휘·파생지표 | core/llm/agent import 금지 |
 | `core/` | 순수 DataFrame 연산, Workspace, 스키마, 검증, 트레이스 | LLM·Streamlit 의존 금지 |
-| `llm/` | Ollama API 래퍼, intent/codegen 프롬프트 | agent import 금지 (순환 방지) |
+| `llm/` | 프로바이더 추상화, intent/codegen 프롬프트 | agent·streamlit import 금지 |
 | `agent/` | 라우팅, 오케스트레이션, 응답 포맷팅 | — |
 | `ui/` | Streamlit 렌더링 | `agent.executor.run` 외 로직 호출 금지 |
 
@@ -35,8 +35,9 @@ domains → core → llm → agent → ui
 
 ```
 사용자 질문
+  → [0] LLM 프로바이더 선택 (llm/providers.py) — intent 호출 전
   → [1] 규칙 라우터 (agent/router.py)
-  → [2] LLM intent 파싱 (llm/intent.py) — 규칙 미적중 시에만
+  → [2] LLM intent 파싱 (llm/intent.py) — 규칙 미적중이고 프로바이더 있을 때만
   → [3] 스키마 검증 + 파이프라인 검증 (core/op_spec.py)
   → [4] Workspace executor (agent/executor.py)
   → [5] 연산별 실행 (agent/tools.py → core/operations.py)
@@ -45,13 +46,35 @@ domains → core → llm → agent → ui
   → [8] JSONL 트레이스 기록 (core/trace.py)
 ```
 
+**[0] 프로바이더 선택**은 `get_provider()`가 담당합니다. 강제 지정
+(`EXCEL_CHATBOT_LLM_PROVIDER`) → Ollama 헬스체크 → Gemini 키 확인 →
+없으면 데모 모드(`None`) 순으로 결정되며, 결과는 60초 캐시됩니다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> CheckForce: get_provider()
+    CheckForce --> OllamaForced: EXCEL_CHATBOT_LLM_PROVIDER=ollama
+    CheckForce --> GeminiForced: EXCEL_CHATBOT_LLM_PROVIDER=gemini
+    CheckForce --> AutoSelect: 미지정
+    AutoSelect --> OllamaLive: /api/tags OK (2s)
+    AutoSelect --> GeminiKey: Ollama 불가 + GEMINI_API_KEY
+    AutoSelect --> Demo: 둘 다 불가
+    OllamaForced --> [*]: OllamaProvider
+    GeminiForced --> [*]: GeminiProvider
+    OllamaLive --> [*]: OllamaProvider
+    GeminiKey --> [*]: GeminiProvider
+    Demo --> [*]: None (데모 모드)
+```
+
 **[1] 규칙 라우터가 항상 선행**합니다. `"~별 합계"`, `"가장 높은 행"`,
 `"A에서 B 뺀 값"` 같은 정형 패턴은 LLM 호출 없이 즉시 operation
 파이프라인으로 변환됩니다. 이 경로는 결정적(deterministic)이므로
 지연시간이 짧고 평가 하네스에서 100% 재현됩니다.
 
-**[2] LLM 폴백**은 규칙 미적중 시에만 발생합니다. Ollama에
-`format=json, temperature=0`으로 요청하고, 응답을 스키마 검증합니다.
+**[2] LLM 폴백**은 규칙 미적중이고 프로바이더가 있을 때만 발생합니다.
+프로바이더가 없으면(데모 모드) `parse_intent`를 호출하지 않고 정형 질의
+예시가 포함된 clarify 메시지를 반환합니다. Ollama/Gemini 경로는
+`temperature=0`·JSON 응답으로 요청하고, 응답을 스키마 검증합니다.
 검증 실패 시 임의 실행 대신 clarify(재질문 유도)로 강등됩니다 —
 **불확실하면 실행하지 않는다**가 기본값입니다.
 
@@ -162,9 +185,12 @@ class DomainPack:
   "input_rows": 42,
   "input_columns": ["비목분류", "당년도예산"],
   "output_rows": 5,
-  "output_columns": ["비목분류", "당년도예산_sum"]
+  "output_columns": ["비목분류", "당년도예산_sum"],
+  "llm_provider": "ollama"
 }
 ```
+
+`llm_provider`: LLM 경로 사용 시 `"ollama"` 또는 `"gemini"`. 규칙 경로·데모 모드는 `null`.
 
 `route_path` 값: `rule` | `llm` | `llm_fallback_clarify` | `codegen`
 
@@ -201,6 +227,13 @@ escape hatch 결과에는 항상 다음 경고가 부착됩니다.
 있습니다.
 
 ## 9. 주요 설계 결정과 근거
+
+**왜 Ollama 우선 + 클라우드 폴백인가.**
+로컬 Ollama는 업로드 데이터가 외부로 나가지 않고 intent JSON만 LLM에
+전달되므로 “계획만 위임” 원칙을 유지합니다. Streamlit Cloud 등 키만 있는
+환경에서는 Gemini로 동일한 계획 생성 경로를 재사용하고, 둘 다 없으면
+데모 모드로 정형 규칙 질의만 허용합니다. 프로바이더 교체는 `llm/`에
+격리되어 core·agent의 연산·검증 경로는 변하지 않습니다.
 
 **왜 코드 생성이 아니라 폐쇄 연산 집합인가.**
 LLM 코드 생성은 표현력이 높지만 (a) 생성 코드의 정확성을 보장할 수 없고
