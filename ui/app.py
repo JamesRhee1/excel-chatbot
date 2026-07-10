@@ -15,7 +15,7 @@ from core.workspace_loader import load_into_workspace
 from core.profiler import profile_dataframe
 from core.reader import load_excel_with_domain
 from core.workspace import Workspace
-from llm.providers import is_llm_available
+from llm.providers import get_provider, is_llm_available
 
 MODEL_OPTIONS = [
     "qwen2.5:7b",
@@ -26,6 +26,22 @@ MODEL_OPTIONS = [
 ]
 
 APP_VERSION = "2026-07-02-multi-file"
+
+
+def llm_provider_sidebar_label(provider_name: str | None) -> str:
+    """Map active provider name to a short sidebar status caption."""
+    if provider_name == "ollama":
+        return "LLM: Ollama (로컬)"
+    if provider_name == "gemini":
+        return "LLM: Gemini (클라우드)"
+    return "LLM: 비활성 (데모 모드)"
+
+
+def _llm_provider_interpret_name(provider_name: str | None) -> str | None:
+    mapping = {"ollama": "Ollama", "gemini": "Gemini"}
+    if not provider_name:
+        return None
+    return mapping.get(provider_name)
 
 
 def _inject_secrets_to_env() -> None:
@@ -320,8 +336,12 @@ def _render_chat_history(model: str = MODEL_OPTIONS[0]) -> None:
                     st.dataframe(message["combined_df"], use_container_width=True)
             debug_logs = message.get("debug_logs") or []
             ops_text = message.get("operations_summary")
-            if debug_logs or ops_text:
+            if debug_logs or ops_text or message.get("route_path") == "llm":
                 with st.expander("처리 과정 보기"):
+                    if message.get("route_path") == "llm":
+                        interpret = _llm_provider_interpret_name(message.get("llm_provider"))
+                        if interpret:
+                            st.caption(f"해석: {interpret}")
                     if ops_text:
                         st.markdown(ops_text)
                     for log in debug_logs:
@@ -353,6 +373,8 @@ def _append_assistant_message(result: dict) -> None:
             "combined_df": combined_df if combined_df is not None and display_df is not combined_df else None,
             "debug_logs": result.get("debug_logs", []),
             "verification": result.get("verification", []),
+            "route_path": result.get("route_path"),
+            "llm_provider": result.get("llm_provider"),
         }
     )
 
@@ -395,6 +417,8 @@ def _process_user_message(user_message: str, model: str) -> None:
                 "codegen_pending": True,
                 "codegen_user_message": result.get("codegen_user_message", user_message),
                 "operations_summary": _operations_summary(result.get("operations", [])),
+                "route_path": result.get("route_path"),
+                "llm_provider": result.get("llm_provider"),
             }
         )
     elif result["success"]:
@@ -455,6 +479,8 @@ def main() -> None:
         model = st.selectbox("Ollama 모델", MODEL_OPTIONS, index=0)
         if st.session_state.multi_mode:
             st.info("다중 파일 모드")
+        active = get_provider()
+        st.caption(llm_provider_sidebar_label(active.name if active else None))
 
     uploaded_files = st.file_uploader(
         "Excel 파일 업로드 (.xlsx)",
