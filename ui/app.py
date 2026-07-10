@@ -26,6 +26,7 @@ MODEL_OPTIONS = [
 ]
 
 APP_VERSION = "2026-07-02-multi-file"
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def llm_provider_sidebar_label(provider_name: str | None) -> str:
@@ -35,6 +36,37 @@ def llm_provider_sidebar_label(provider_name: str | None) -> str:
     if provider_name == "gemini":
         return "LLM: Gemini (클라우드)"
     return "LLM: 비활성 (데모 모드)"
+
+
+def sidebar_provider_controls_mode(provider_name: str | None) -> str:
+    """Return sidebar model-control mode: ollama, gemini, or demo.
+
+    >>> sidebar_provider_controls_mode("ollama")
+    'ollama'
+    >>> sidebar_provider_controls_mode("gemini")
+    'gemini'
+    >>> sidebar_provider_controls_mode(None)
+    'demo'
+    """
+    if provider_name == "ollama":
+        return "ollama"
+    if provider_name == "gemini":
+        return "gemini"
+    return "demo"
+
+
+def gemini_model_sidebar_caption(gemini_model: str | None = None) -> str:
+    """Build Gemini model caption for the sidebar.
+
+    >>> gemini_model_sidebar_caption(None)
+    '모델: gemini-2.0-flash'
+    >>> gemini_model_sidebar_caption("")
+    '모델: gemini-2.0-flash'
+    >>> gemini_model_sidebar_caption("gemini-2.5-pro")
+    '모델: gemini-2.5-pro'
+    """
+    resolved = (gemini_model or "").strip() or DEFAULT_GEMINI_MODEL
+    return f"모델: {resolved}"
 
 
 def _llm_provider_interpret_name(provider_name: str | None) -> str | None:
@@ -476,11 +508,19 @@ def main() -> None:
 
     with st.sidebar:
         st.header("설정")
-        model = st.selectbox("Ollama 모델", MODEL_OPTIONS, index=0)
+        active = get_provider()
+        provider_name = active.name if active else None
+        controls_mode = sidebar_provider_controls_mode(provider_name)
+        if controls_mode == "ollama":
+            model = st.selectbox("Ollama 모델", MODEL_OPTIONS, index=0)
+        elif controls_mode == "gemini":
+            model = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+            st.caption(gemini_model_sidebar_caption(os.environ.get("GEMINI_MODEL")))
+        else:
+            model = MODEL_OPTIONS[0]
         if st.session_state.multi_mode:
             st.info("다중 파일 모드")
-        active = get_provider()
-        st.caption(llm_provider_sidebar_label(active.name if active else None))
+        st.caption(llm_provider_sidebar_label(provider_name))
 
     uploaded_files = st.file_uploader(
         "Excel 파일 업로드 (.xlsx)",
